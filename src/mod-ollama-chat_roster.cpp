@@ -13,12 +13,17 @@ namespace OllamaChat::Roster
     namespace
     {
         uint32_t s_accumMs = 0;
+        uint32_t s_intervalMs = 60000;
+        bool s_enabled = true;
 
-        // Off with periodic online/offline: that setting rotates the roster on purpose, and putting it back would fight it.
-        bool Enabled()
+        // Read at startup and again each time the roster is saved, not on every update tick: a key missing from the conf file is
+        // logged each time it is asked for. Off with periodic online/offline, which rotates the roster on purpose (putting it back
+        // would fight that).
+        void LoadConfig()
         {
-            return sConfigMgr->GetOption<bool>("OllamaChat.Roster.KeepAcrossRestarts", true) &&
-                   !sConfigMgr->GetOption<bool>("AiPlayerbot.EnablePeriodicOnlineOffline", false);
+            s_enabled = sConfigMgr->GetOption<bool>("OllamaChat.Roster.KeepAcrossRestarts", true) &&
+                        !sConfigMgr->GetOption<bool>("AiPlayerbot.EnablePeriodicOnlineOffline", false);
+            s_intervalMs = std::max<uint32_t>(10, sConfigMgr->GetOption<uint32>("OllamaChat.Roster.SaveIntervalSec", 60)) * 1000;
         }
 
         uint64_t CountRows(char const* event)
@@ -31,7 +36,8 @@ namespace OllamaChat::Roster
 
     void Restore()
     {
-        if (!Enabled())
+        LoadConfig();
+        if (!s_enabled)
             return;
 
         uint32_t const validIn = sConfigMgr->GetOption<uint32>("AiPlayerbot.PermanentlyInWorldTime", 31104000);
@@ -53,13 +59,13 @@ namespace OllamaChat::Roster
     void Tick(uint32_t diffMs)
     {
         s_accumMs += diffMs;
-        uint32_t const intervalMs = std::max<uint32_t>(10, sConfigMgr->GetOption<uint32>("OllamaChat.Roster.SaveIntervalSec", 60)) * 1000;
-        if (s_accumMs < intervalMs)
+        if (s_accumMs < s_intervalMs)
             return;
         s_accumMs = 0;
+        LoadConfig();
 
         // A realm with nobody on has no roster yet: keep the last one rather than save nothing over it.
-        if (!Enabled() || CountRows("add") == 0)
+        if (!s_enabled || CountRows("add") == 0)
             return;
 
         auto transaction = PlayerbotsDatabase.BeginTransaction();

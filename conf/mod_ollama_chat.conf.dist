@@ -3137,6 +3137,23 @@ OllamaChat.Community.Enable = 1
 #     Default:     0
 OllamaChat.Community.JoinHomeGuild = 0
 
+# OllamaChat.Roster.KeepAcrossRestarts
+#     Description: Bring back the same random bots after a worldserver restart. mod-playerbots forgets which random bots are in the
+#                  world every time the server starts (RandomPlayerbotMgr::Init deletes their `add` rows) and draws a new set at random,
+#                  so a restart swaps about half of a 200-bot realm for strangers. With this on, the module keeps a copy of that set
+#                  (event `ollama_roster` in playerbots_random_bots) and puts it back at startup, before playerbots reads it. A bot kept
+#                  offline on purpose (a live `logout` row) stays out. Does nothing with AiPlayerbot.EnablePeriodicOnlineOffline, which
+#                  rotates the bots on purpose. Works with AiPlayerbot.DisabledWithoutRealPlayer: the bots that logged out when the last
+#                  player left are the ones that log back in.
+#     Default:     1
+OllamaChat.Roster.KeepAcrossRestarts = 1
+
+# OllamaChat.Roster.SaveIntervalSec
+#     Description: How often (seconds, at least 10) the roster is copied. Nothing is saved while no bots are in the roster, so a realm that
+#                  has been up with nobody on keeps the last one.
+#     Default:     60
+OllamaChat.Roster.SaveIntervalSec = 60
+
 # OllamaChat.Community.CastStarterPercent
 #     Description: Percent of conversation starters that come from the regulars when one of them is free to talk.
 #     Default:     75

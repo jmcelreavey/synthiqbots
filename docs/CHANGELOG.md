@@ -13,6 +13,9 @@ See [coa.md](coa.md) for the whole picture. Everything here is off or inert unti
 
 ### Added
 
+- **Quiet commands.** The tactical tier, the proactive engine's proximity checks and the leader's orders give bots playerbots commands as the bot's master, so playerbots took them for the player's own orders and told the player about each one ("Following", "Selling [Linen Cloth]", "I'm maintaining"). A bot now reports nothing for twelve seconds around a command nobody typed (`mod-ollama-chat_quiet.cpp`, and `patches/mod-playerbots-quiet-reports.patch` for the gate in playerbots; without the patch nothing changes). A command a player asks for is answered as before.
+- **Rumours and guild place.** The bot's brief carries news of whitelisted players' deaths and level-ups (`rumours`) and the bot's guild and rank (`guild`, `guild_rank`) for the mind service's gossip and guild roles (docs/roleplay.md).
+- **Roster.** mod-playerbots deletes every random bot's `add` row at each worldserver start and draws a new set at random, so a restart swapped about half of the realm's bots for strangers. The module now keeps a copy of the roster (`ollama_roster` rows) and puts it back at startup, before playerbots reads it. New keys: `OllamaChat.Roster.KeepAcrossRestarts` (default on), `OllamaChat.Roster.SaveIntervalSec`. See [roster.md](roster.md).
 - **Roleplay mode.** With the SquidBots mind service the bots can be characters in the lore instead of fake players (the default;
   switched on the service's Minds page, followed by the module within seconds). The module tells the service each bot's race, class,
   gender, level, zone, what it is doing and its open errands (`DescribeBotBrief`, a `roleplay_context=` line in the `[BOT STATE SNAPSHOT]`,
