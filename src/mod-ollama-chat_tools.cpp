@@ -8,6 +8,7 @@
 #include "mod-ollama-chat_promotion.h"
 #include "mod-ollama-chat_ambient.h"
 #include "mod-ollama-chat_roleplay.h"
+#include "mod-ollama-chat_quiet.h"
 #include "mod-ollama-chat_worldtask.h"
 #include "mod-ollama-chat_mcpserver.h"
 #include "mod-ollama-chat_opsapi.h"
@@ -1539,6 +1540,11 @@ static std::unordered_set<uint64_t> s_stayingBots;
 
         std::string prefixed = ApplyPlayerbotPrefix(text);
 
+        // Nobody typed this: the tactical tier, the leader loops and external tools name no player. As the bot's master it would still read to
+        // playerbots as an order from the player, and the player would be told "Following", "Selling ..." and "I'm maintaining" out of the blue.
+        if (masterGuid == 0)
+            OllamaChat::Quiet::Mute(botGuid, 12);
+
         bool didThrow = false;
         try {
             // PlayerbotAI has two HandleCommand overloads — the public one takes
@@ -2392,6 +2398,8 @@ static std::unordered_set<uint64_t> s_stayingBots;
                 return nlohmann::json{{"error", "party guest has no human master yet — retry in a few seconds"}};
             issuer = gm;
         }
+
+        OllamaChat::Quiet::Mute(targetBotGuid, 12);       // the leader's order, not the player's: the player is not told about it
 
         bool didThrow = false;
         try {
@@ -25079,6 +25087,15 @@ nlohmann::json DescribeBotBrief(Player* p)
     brief["quests"] = quests;
     brief["doing"] = doing;
     brief["events"] = OllamaChat::Roleplay::RecentEvents(p->GetGUID().GetRawValue());
+    // News of the players that the bot may have heard, and its place in a guild (rank 0 leads it, 1 are its officers): who it is among its own.
+    nlohmann::json rumours = OllamaChat::Roleplay::Rumours(p);
+    if (!rumours.empty())
+        brief["rumours"] = rumours;
+    if (Guild* guild = p->GetGuild())
+    {
+        brief["guild"] = guild->GetName();
+        brief["guild_rank"] = static_cast<int>(p->GetRank());
+    }
     OllamaChat::Roleplay::AddWorldColour(brief, p);
     return brief;
 }

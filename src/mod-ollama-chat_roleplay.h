@@ -29,6 +29,11 @@ namespace OllamaChat
         // [{"k": kind, "t": text, "ago": seconds}, ...], newest first, at most eight. [] when there is nothing.
         nlohmann::json RecentEvents(uint64_t botGuid);
 
+        // World thread. News about whitelisted players, for the bot's brief: [{"who", "k", "t", "zone", "ago", "near", "id"}], newest first, at most
+        // three. `near` is 2 when the bot is in that player's guild, 1 in the same zone, 0 otherwise; the mind service decides how long such news takes
+        // to reach a bot and whether it is passed on (rp.py, Rp.pending_rumour). [] when there is none.
+        nlohmann::json Rumours(Player* bot);
+
         // World thread. The time of day and the holidays being kept, for the bot's brief ("time", "holidays").
         void AddWorldColour(nlohmann::json& brief, Player* bot);
 

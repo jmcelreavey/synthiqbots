@@ -44,6 +44,8 @@ namespace OllamaChat
 {
     namespace Roleplay
     {
+        void NoteHuman(Player* human, const char* kind, const std::string& text);   // below: news about a whitelisted player
+
         namespace
         {
             struct Event
@@ -211,7 +213,12 @@ namespace OllamaChat
             void Observe(Player* bot, const char* kind, const std::string& text, const char* companionEvent, const std::string& detail,
                          uint32_t chancePercent, uint32_t delayMs)
             {
-                if (!bot || !IsBot(bot))
+                if (bot && !IsBot(bot))
+                {
+                    NoteHuman(bot, kind, text);     // not a journal: news, which the bots may pass on
+                    return;
+                }
+                if (!bot)
                     return;
                 Note(bot->GetGUID().GetRawValue(), kind, text);
                 if (companionEvent)
@@ -501,6 +508,50 @@ namespace OllamaChat
                 ring.pop_front();
             if (s_events.size() > 6000)
                 s_events.clear();   // a realm this busy has nobody to tell it to: start over rather than grow
+        }
+
+        // What happened to the whitelisted players lately, newest last. A bot hears of it second hand (Rumours), after a delay the mind service decides.
+        struct HumanEvent
+        {
+            time_t      at;
+            uint64_t    guid;
+            std::string who;
+            std::string kind;
+            std::string text;
+            uint32      zoneId;
+            uint32      guildId;
+        };
+        std::deque<HumanEvent> s_humanEvents;       // guarded by s_mutex
+        constexpr time_t kRumourLifeSec = 6 * 3600;
+
+        void NoteHuman(Player* human, const char* kind, const std::string& text)
+        {
+            // Only a death or a level is news, and only about a whitelisted player.
+            if (!human || (std::string(kind) != "death" && std::string(kind) != "levelup") || !OllamaChat::Promotion::IsOperator(human))
+                return;
+            const time_t now = time(nullptr);
+            std::lock_guard<std::mutex> lock(s_mutex);
+            s_humanEvents.push_back({now, human->GetGUID().GetRawValue(), human->GetName(), kind, text, human->GetZoneId(), human->GetGuildId()});
+            while (!s_humanEvents.empty() && (s_humanEvents.size() > 20 || now - s_humanEvents.front().at > kRumourLifeSec))
+                s_humanEvents.pop_front();
+        }
+
+        nlohmann::json Rumours(Player* bot)
+        {
+            nlohmann::json out = nlohmann::json::array();
+            if (!bot)
+                return out;
+            const time_t now = time(nullptr);
+            std::lock_guard<std::mutex> lock(s_mutex);
+            for (auto event = s_humanEvents.rbegin(); event != s_humanEvents.rend() && out.size() < 3; ++event)
+            {
+                if (event->guid == bot->GetGUID().GetRawValue() || now - event->at > kRumourLifeSec)
+                    continue;
+                const int near = event->guildId && event->guildId == bot->GetGuildId() ? 2 : event->zoneId == bot->GetZoneId() ? 1 : 0;
+                out.push_back({{"who", event->who}, {"k", event->kind}, {"t", event->text}, {"zone", ZoneName(event->zoneId)},
+                               {"ago", static_cast<int64_t>(now - event->at)}, {"near", near}, {"id", static_cast<int64_t>(event->at)}});
+            }
+            return out;
         }
 
         nlohmann::json RecentEvents(uint64_t botGuid)

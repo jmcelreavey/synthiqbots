@@ -1,0 +1,23 @@
+--- a/src/Bot/PlayerbotAI.cpp
++++ b/src/Bot/PlayerbotAI.cpp
+@@ -3015,6 +3015,11 @@
+ // again in another form. Weak, so playerbots links and behaves exactly as before without that module.
+ extern std::function<bool(Player*, int, std::string const&)> g_ollamaOutgoingChannelFilter __attribute__((weak));
+ 
++// An optional gate on what a bot reports to its master unasked ("Selling [Linen Cloth]", "I'm maintaining", "Following"), set by
++// mod-ollama-chat. Returning true means this bot is mid-way through something nobody asked it to do (a housekeeping or stance command the
++// module ran on its own), so it stays quiet about it. Weak, like the filter above: without the module playerbots behaves exactly as before.
++extern std::function<bool(Player*)> g_ollamaMuteReports __attribute__((weak));
++
+ // AzerothCore's own chat log hangs off the packet the client sends, and a bot never sends one:
+ // whatever the bots say would never be written anywhere. So write it here instead, in the shape
+ // that log uses, on the "playerbots.chat" logger. Nothing is written unless worldserver.conf
+@@ -3292,6 +3297,8 @@
+ // greetings reach a real master.
+ bool PlayerbotAI::MasterWantsThis()
+ {
++    if (&g_ollamaMuteReports && g_ollamaMuteReports && g_ollamaMuteReports(bot))
++        return false;
+     if (sPlayerbotAIConfig.botsWhisperPublic || greeting)
+         return true;
+     Player* master = GetMaster();

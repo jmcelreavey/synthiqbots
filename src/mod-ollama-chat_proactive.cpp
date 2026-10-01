@@ -8,6 +8,7 @@
 // Design refs: specs/002-proactive-leader-bot/{spec,plan,data-model,research,
 // contracts/*}.md.
 
+#include "mod-ollama-chat_quiet.h"
 #include "mod-ollama-chat_proactive.h"
 #include "mod-ollama-chat_tactical.h"
 #include "mod-ollama-chat_config.h"
@@ -1868,6 +1869,7 @@ void StartActivityPlan(Proposal& prop)
             // the bot follows the player. v1: simple HandleCommand("follow")
             // — the bot already has the human as master via auto-claim.
             std::string cmd = "follow";
+            OllamaChat::Quiet::Mute(bot->GetGUID().GetRawValue(), 12);     // an approved plan, not an order the player typed: no "Following" to read
             botAI->HandleCommand(CHAT_MSG_WHISPER, cmd, player);
             plan.commandsDispatched.push_back(cmd);
             s_plansByProposalId[prop.proposalId] = plan;
@@ -2197,7 +2199,10 @@ void EvaluateTickLocked(uint64_t botGuid, uint64_t playerGuid)
             {
                 if (Player* ownerBot = ObjectAccessor::FindPlayer(ObjectGuid(ownerGuid)))
                     if (PlayerbotAI* ownerAI = PlayerbotsMgr::instance().GetPlayerbotAI(ownerBot))
+                    {
+                        OllamaChat::Quiet::Mute(ownerBot->GetGUID().GetRawValue(), 12);
                         ownerAI->HandleCommand(CHAT_MSG_WHISPER, "follow", player);
+                    }
                 oc.inProximityWaiting = false;
             }
             AbortActivityPlan(plan->proposalId, "owner left range");
@@ -2300,7 +2305,11 @@ void EvaluateTickLocked(uint64_t botGuid, uint64_t playerGuid)
                 if (!c.inProximityWaiting)
                 {
                     PlayerbotAI* botAI = PlayerbotsMgr::instance().GetPlayerbotAI(bot);
-                    if (botAI) botAI->HandleCommand(CHAT_MSG_WHISPER, "stay", player);
+                    if (botAI)
+                    {
+                        OllamaChat::Quiet::Mute(bot->GetGUID().GetRawValue(), 12);     // the player walked off: waiting is not a thing they asked for
+                        botAI->HandleCommand(CHAT_MSG_WHISPER, "stay", player);
+                    }
                     c.inProximityWaiting = true;
                 }
                 uint64_t cdMs = static_cast<uint64_t>(g_ProactiveProximityWarnCooldownSec) * 1000;
@@ -2336,7 +2345,11 @@ void EvaluateTickLocked(uint64_t botGuid, uint64_t playerGuid)
                 {
                     // Player closed the gap — resume travel silently. No chat
                     // line; the resumed movement is the signal.
-                    if (botAI) botAI->HandleCommand(CHAT_MSG_WHISPER, "follow", player);
+                    if (botAI)
+                    {
+                        OllamaChat::Quiet::Mute(bot->GetGUID().GetRawValue(), 12);
+                        botAI->HandleCommand(CHAT_MSG_WHISPER, "follow", player);
+                    }
                     c.inProximityWaiting = false;
                     // If this plan never got its opening follow (see the heal
                     // below), the resume we just issued IS that opening follow —
@@ -2369,6 +2382,7 @@ void EvaluateTickLocked(uint64_t botGuid, uint64_t playerGuid)
                     // pushing it here makes the heal idempotent.
                     if (botAI)
                     {
+                        OllamaChat::Quiet::Mute(bot->GetGUID().GetRawValue(), 12);
                         botAI->HandleCommand(CHAT_MSG_WHISPER, "follow", player);
                         plan->commandsDispatched.push_back("follow");
                     }
@@ -2446,7 +2460,11 @@ void EvaluateTickLocked(uint64_t botGuid, uint64_t playerGuid)
             if (needRehome || needStayHeal)
             {
                 PlayerbotAI* botAI = PlayerbotsMgr::instance().GetPlayerbotAI(bot);
-                if (botAI) botAI->HandleCommand(CHAT_MSG_WHISPER, "follow", player);
+                if (botAI)
+                {
+                    OllamaChat::Quiet::Mute(bot->GetGUID().GetRawValue(), 12);
+                    botAI->HandleCommand(CHAT_MSG_WHISPER, "follow", player);
+                }
                 c.inProximityWaiting = false;
             }
         }

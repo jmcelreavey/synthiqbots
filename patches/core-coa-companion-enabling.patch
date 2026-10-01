@@ -1,0 +1,169 @@
+diff --git a/src/server/coa/AscensionCompat.cpp b/src/server/coa/AscensionCompat.cpp
+index 38614beae..a7e20af79 100644
+--- a/src/server/coa/AscensionCompat.cpp
++++ b/src/server/coa/AscensionCompat.cpp
+@@ -20,6 +20,7 @@
+ #include "AscensionClassMechanics19To25.h"
+ #include "AscensionClassMechanics26To32.h"
+ #include "AscensionCoATalentData.h"
++#include "AscensionClassServiceBridge.h"
+ #include "AscensionCoAConfig.h"
+ #include "WorldSessionMgr.h"
+ #include "AscensionCoATalentState.h"
+@@ -6816,6 +6817,14 @@ void AppendConfiguredClientConfigs(AscensionClientConfig& config) {
+                                   config.Integers);
+ }
+ 
++bool AscensionClassServiceBridge::SwitchSpecialization(Player* player, uint32 specializationId) {
++  return AscensionClassService::Instance().SwitchSpecialization(player, specializationId);
++}
++
++bool AscensionClassServiceBridge::SetTalentRank(Player* player, AscensionCompatData::CoATalentEntry const& entry, uint32 rank, std::string& error) {
++  return AscensionClassService::Instance().SetTalentRank(player, entry, rank, error);
++}
++
+ void AddAscensionCompatScripts() {
+   RegisterAscensionClientConfig([](AscensionClientConfig& config) {
+     config.Booleans.emplace_back("CONFIG_CHARACTER_ADVANCEMENT_BUILD_INSPECT_ENABLED", true);
+diff --git a/src/server/game/DungeonFinding/LFGMgr.cpp b/src/server/game/DungeonFinding/LFGMgr.cpp
+index 0ffe71ecb..89f76cd57 100644
+--- a/src/server/game/DungeonFinding/LFGMgr.cpp
++++ b/src/server/game/DungeonFinding/LFGMgr.cpp
+@@ -1931,6 +1931,14 @@ namespace lfg
+        @param[in]     guid Player guid to update answer
+        @param[in]     accept Player answer
+     */
++    uint32 LFGMgr::GetProposalIdForPlayer(ObjectGuid guid) const
++    {
++        for (auto const& [id, proposal] : ProposalsStore)
++            if (proposal.players.find(guid) != proposal.players.end())
++                return id;
++        return 0;
++    }
++
+     void LFGMgr::UpdateProposal(uint32 proposalId, ObjectGuid guid, bool accept)
+     {
+         // Check if the proposal exists
+diff --git a/src/server/game/DungeonFinding/LFGMgr.h b/src/server/game/DungeonFinding/LFGMgr.h
+index 8b12cb7da..8a332478c 100644
+--- a/src/server/game/DungeonFinding/LFGMgr.h
++++ b/src/server/game/DungeonFinding/LFGMgr.h
+@@ -540,6 +540,9 @@ namespace lfg
+         void UpdateBoot(ObjectGuid guid, bool accept);
+         /// Updates proposal to join dungeon with player answer
+         void UpdateProposal(uint32 proposalId, ObjectGuid guid, bool accept);
++        // The id of the proposal this player has been offered, or 0. A client learns it from SMSG_LFG_PROPOSAL_UPDATE, which a bot's null-socket
++        // session never receives (mod-coa-playerbots).
++        [[nodiscard]] uint32 GetProposalIdForPlayer(ObjectGuid guid) const;
+         /// Updates the role check with player answer
+         void UpdateRoleCheck(ObjectGuid gguid, ObjectGuid guid = ObjectGuid::Empty, uint8 roles = PLAYER_ROLE_NONE);
+         /// Sets player lfg roles
+diff --git a/src/server/game/Guilds/Guild.h b/src/server/game/Guilds/Guild.h
+index 4fbc05d88..e23d7ce62 100644
+--- a/src/server/game/Guilds/Guild.h
++++ b/src/server/game/Guilds/Guild.h
+@@ -292,6 +292,8 @@ using SlotIds = std::set<uint8>;
+ 
+ class Guild
+ {
++    friend class BotMgr;    // mod-coa-playerbots: guild bank deposit, withdraw and gather commands
++
+ public: // pussywizard: public class Member
+     // Class representing guild member
+     class Member
+diff --git a/src/server/game/Handlers/PetitionsHandler.cpp b/src/server/game/Handlers/PetitionsHandler.cpp
+index ed55395d6..76cc93746 100644
+--- a/src/server/game/Handlers/PetitionsHandler.cpp
++++ b/src/server/game/Handlers/PetitionsHandler.cpp
+@@ -654,6 +654,7 @@ void WorldSession::HandleOfferPetitionOpcode(WorldPacket& recvData)
+         }
+ 
+     player->SendDirectMessage(&data);
++    sScriptMgr->OnPetitionOffered(player, petitionguid);
+ }
+ 
+ void WorldSession::HandleTurnInPetitionOpcode(WorldPacket& recvData)
+diff --git a/src/server/game/Scripting/ScriptDefines/PlayerScript.cpp b/src/server/game/Scripting/ScriptDefines/PlayerScript.cpp
+index 3efb58c2a..209b70196 100644
+--- a/src/server/game/Scripting/ScriptDefines/PlayerScript.cpp
++++ b/src/server/game/Scripting/ScriptDefines/PlayerScript.cpp
+@@ -1103,6 +1103,11 @@ std::optional<uint32> ScriptMgr::OnPlayerGetGameModeMask(Player const* player)
+     return std::nullopt;
+ }
+ 
++void ScriptMgr::OnPetitionOffered(Player* player, ObjectGuid petitionGuid)
++{
++    CALL_ENABLED_HOOKS(PlayerScript, PLAYERHOOK_ON_PETITION_OFFERED, script->OnPetitionOffered(player, petitionGuid));
++}
++
+ PlayerScript::PlayerScript(char const* name, std::vector<uint16> enabledHooks)
+     : ScriptObject(name, PLAYERHOOK_END)
+ {
+diff --git a/src/server/game/Scripting/ScriptDefines/PlayerScript.h b/src/server/game/Scripting/ScriptDefines/PlayerScript.h
+index f9a2a854d..a6922f0cd 100644
+--- a/src/server/game/Scripting/ScriptDefines/PlayerScript.h
++++ b/src/server/game/Scripting/ScriptDefines/PlayerScript.h
+@@ -250,6 +250,7 @@ enum PlayerHook
+     PLAYERHOOK_ON_REFRESH_QUEST_GIVER,
+     PLAYERHOOK_ON_COA_PROGRESS,
+     PLAYERHOOK_ON_GET_GAME_MODE_MASK,
++    PLAYERHOOK_ON_PETITION_OFFERED,
+     PLAYERHOOK_END
+ };
+ 
+@@ -1079,6 +1080,14 @@ public:
+      * @return true when the script resolved the mask
+      */
+     [[nodiscard]] virtual bool OnPlayerGetGameModeMask(Player const* /*player*/, uint32& /*mask*/) { return false; }
++
++    /**
++     * @brief Called when `player` is offered a guild or arena petition to sign (the leader's "Request Signature").
++     *
++     * @param player The player who was offered the petition
++     * @param petitionGuid The petition's guid
++     */
++    virtual void OnPetitionOffered(Player* /*player*/, ObjectGuid /*petitionGuid*/) { }
+ };
+ 
+ #endif
+diff --git a/src/server/game/Scripting/ScriptMgr.h b/src/server/game/Scripting/ScriptMgr.h
+index 70a627ca7..11d9cbeb7 100644
+--- a/src/server/game/Scripting/ScriptMgr.h
++++ b/src/server/game/Scripting/ScriptMgr.h
+@@ -522,6 +522,7 @@ public: /* PlayerScript */
+     bool OnPlayerRefreshQuestGiver(Player* player, Object* questGiver, Quest const* quest);
+     void OnPlayerCoAProgress(Player* player, CoAProgressEvent event, uint32 value);
+     std::optional<uint32> OnPlayerGetGameModeMask(Player const* player);
++    void OnPetitionOffered(Player* player, ObjectGuid petitionGuid);
+ 
+     // Anti cheat
+     void AnticheatSetCanFlybyServer(Player* player, bool apply);
+diff --git a/src/server/coa/AscensionClassServiceBridge.h b/src/server/coa/AscensionClassServiceBridge.h
+new file mode 100644
+index 000000000..e1017a4df
+--- /dev/null
++++ b/src/server/coa/AscensionClassServiceBridge.h
+@@ -0,0 +1,23 @@
++#pragma once
++
++#include "AscensionCoATalentData.h"
++#include <string>
++
++class Player;
++
++// Minimal, deliberately narrow bridge into AscensionClassService, which is entirely private to AscensionCompat.cpp (defined inside a
++// file-local anonymous namespace, no other public header). A bot module needs to switch spec and spend a bot's paid (AECost/TECost > 0)
++// Ascension talent points through the same budget-checked, mutually-exclusive-group-aware path a real player's `.localspec` and
++// `.localtalent` commands use, instead of writing PlayerSettings and learnSpell()-ing spells directly, which skips the budget check and the
++// in-memory active-spec bookkeeping that GetActiveSpecialization() depends on.
++// (From mod-coa-playerbots, docs/core-patches.md, "Patch 3".)
++namespace AscensionClassServiceBridge
++{
++    // Mirrors AscensionClassService::SwitchSpecialization(player, specializationId). False if the id is not valid for the player's class.
++    bool SwitchSpecialization(Player* player, uint32 specializationId);
++
++    // Mirrors AscensionClassService::SetTalentRank(player, entry, rank, error) with the budget check on: same validation order, same budget
++    // accounting, same free-choice-group exclusion. False, with `error` filled in, when it is refused (wrong class or spec, level too low,
++    // over budget).
++    bool SetTalentRank(Player* player, AscensionCompatData::CoATalentEntry const& entry, uint32 rank, std::string& error);
++}

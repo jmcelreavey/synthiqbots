@@ -56,6 +56,13 @@ the lore and the line bank live in the mind service.
 Players mode is untouched: with `chat_mode = players` or `OllamaChat.Roleplay.Mode = players` nothing above applies and the module behaves as
 before.
 
+## Rumours and the guild (`mod-ollama-chat_roleplay.cpp`, `DescribeBotBrief`)
+
+The module notes the deaths and level-ups of whitelisted players (`NoteHuman`, from the same hooks as the bots' journal) and puts the last three, newest first,
+in every bot's brief as `rumours`: `{"who", "k", "t", "zone", "ago", "near", "id"}`, where `near` is 2 for a bot in the player's guild, 1 in the same zone
+and 0 elsewhere. How long news takes to reach a bot, and whether it is passed on, is the mind service's decision (docs/roleplay.md there). The brief also
+carries `guild` and `guild_rank` for a bot in a guild (rank 0 leads it). Nothing is sent when there is nothing to say.
+
 ## Keys
 
 All in the *ROLEPLAY* section of `conf/mod_ollama_chat.conf.dist`: `OllamaChat.Roleplay.Mode`, `.Channels`, `.DropStockLines`, `.SayWeight`,

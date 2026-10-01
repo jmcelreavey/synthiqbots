@@ -1,0 +1,22 @@
+diff --git a/src/server/game/Server/WorldSocket.cpp b/src/server/game/Server/WorldSocket.cpp
+index eeb237e1b..aac590b87 100644
+--- a/src/server/game/Server/WorldSocket.cpp
++++ b/src/server/game/Server/WorldSocket.cpp
+@@ -643,7 +643,16 @@ void WorldSocket::HandleAuthSessionCallback(std::shared_ptr<ClientAuthSession> a
+     LoginDatabase.Execute(stmt);
+     // This also allows to check for possible "hack" attempts on account
+ 
+-    if (!sToCloud9Sidecar->ClusterModeEnabled())
++    // The CoA client build shipped before upstream commit 2d13ffd73 keeps world packet headers plaintext after a valid
++    // CMSG_AUTH_SESSION (the private fork's CoA.PlaintextWorldHeaders). Leaving the cipher off makes the socket read its
++    // plaintext CMSG_PING as garbage and drop the connection.
++    bool const usePlaintextWorldHeaders = _ascensionCompatEnabled &&
++        sConfigMgr->GetOption<bool>("CoA.PlaintextWorldHeaders", false, false);
++
++    if (GetRemoteIpAddress().is_loopback())
++        LOG_INFO("coa", "Loopback world-header mode selected: plaintextCompatibility={}", usePlaintextWorldHeaders);
++
++    if (!sToCloud9Sidecar->ClusterModeEnabled() && !usePlaintextWorldHeaders)
+         // even if auth credentials are bad, try using the session key we have - client cannot read auth response error without it
+         _authCrypt.Init(account.SessionKey);
+ 
