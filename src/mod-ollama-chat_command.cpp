@@ -7,6 +7,7 @@
 #include "mod-ollama-chat_playerprefs.h"
 #include "mod-ollama-chat_mcpserver.h"
 #include "mod-ollama-chat_tactical.h"
+#include "mod-ollama-chat_director.h"
 #include "mod-ollama-chat_jev.h"
 #include "Chat.h"
 #include "Config.h"
@@ -53,6 +54,20 @@ ChatCommandTable OllamaChatConfigCommand::GetCommands() const
         { "status", HandleOllamaTacticalStatusCommand, SEC_ADMINISTRATOR, Console::Yes }
     };
 
+    static ChatCommandTable ollamaDirectorForceCommandTable =
+    {
+        { "conserve", HandleOllamaDirectorForceConserveCommand, SEC_ADMINISTRATOR, Console::No },
+        { "cc",       HandleOllamaDirectorForceCcCommand,       SEC_ADMINISTRATOR, Console::No }
+    };
+
+    static ChatCommandTable ollamaDirectorCommandTable =
+    {
+        { "status", HandleOllamaDirectorStatusCommand, SEC_ADMINISTRATOR, Console::Yes },
+        { "off",    HandleOllamaDirectorOffCommand,    SEC_PLAYER,        Console::No },
+        { "on",     HandleOllamaDirectorOnCommand,     SEC_PLAYER,        Console::No },
+        { "force",  ollamaDirectorForceCommandTable }
+    };
+
     static ChatCommandTable ollamaReloadCommandTable =
     {
         { "reload",      HandleOllamaReloadCommand,         SEC_ADMINISTRATOR, Console::Yes },
@@ -60,6 +75,7 @@ ChatCommandTable OllamaChatConfigCommand::GetCommands() const
         { "personality", ollamaPersonalityCommandTable },
         { "gateway",     ollamaGatewayCommandTable },
         { "tactical",    ollamaTacticalCommandTable },
+        { "director",    ollamaDirectorCommandTable },
         { "optout",      HandleOllamaOptOutCommand,         SEC_PLAYER,        Console::No },
         { "optin",       HandleOllamaOptInCommand,          SEC_PLAYER,        Console::No },
         { "mute",        HandleOllamaMuteCommand,           SEC_PLAYER,        Console::No },
@@ -68,10 +84,16 @@ ChatCommandTable OllamaChatConfigCommand::GetCommands() const
 
     static ChatCommandTable commandTable =
     {
-        { "ollama", ollamaReloadCommandTable }
+        { "ollama", ollamaReloadCommandTable },
+        { "localspecstate", HandleLegacyClientPollCommand, SEC_PLAYER, Console::No }
     };
 
     return commandTable;
+}
+
+bool OllamaChatConfigCommand::HandleLegacyClientPollCommand(ChatHandler* /*handler*/)
+{
+    return true; // handled on purpose: nothing to answer, and no error line for the player
 }
 
 bool OllamaChatConfigCommand::HandleOllamaReloadCommand(ChatHandler* handler)
@@ -171,7 +193,7 @@ bool OllamaChatConfigCommand::HandleOllamaGatewayCostsCommand(ChatHandler* handl
 {
     QueryResult tableExists = CharacterDatabase.Query(
         "SELECT TABLE_NAME FROM information_schema.tables "
-        "WHERE table_schema = 'acore_characters' AND table_name = 'mod_ollama_chat_gateway_audit'");
+        "WHERE table_schema = DATABASE() AND table_name = 'mod_ollama_chat_gateway_audit'");
     if (!tableExists)
     {
         handler->SendSysMessage("OllamaChat: audit table missing (source 2026_04_18_gateway_audit.sql).");
@@ -664,6 +686,87 @@ bool OllamaChatConfigCommand::HandleOllamaPersonalityListCommand(ChatHandler* ha
 // Without argument: lists every configured tactical bot.
 // With argument: shows only that bot (useful when scaled up to multiple).
 // ---------------------------------------------------------------------------
+// A player's own switch for the combat director: their companions stop placing marks and calling targets, and the bots keep talking.
+bool OllamaChatConfigCommand::HandleOllamaDirectorOffCommand(ChatHandler* handler)
+{
+    Player* p = handler->GetPlayer();
+    if (!p) { handler->SendSysMessage("OllamaChat: this command is for in-game use."); return true; }
+    OllamaChat::CombatDirector::SetOffFor(p, true);
+    handler->SendSysMessage("OllamaChat: the combat director is off for this character. Your companions choose their own targets and put up no raid marks. Use .ollama director on to turn it back on.");
+    return true;
+}
+
+// Test hook: see CombatDirector::ForceConserveFor.
+bool OllamaChatConfigCommand::HandleOllamaDirectorForceConserveCommand(ChatHandler* handler)
+{
+    Player* p = handler->GetPlayer();
+    if (!p) { handler->SendSysMessage("OllamaChat: this command is for in-game use."); return true; }
+    OllamaChat::CombatDirector::ForceConserveFor(p);
+    handler->SendSysMessage("OllamaChat: the director will put `save mana` on your party's healers at its next look (a test hook).");
+    return true;
+}
+
+bool OllamaChatConfigCommand::HandleOllamaDirectorForceCcCommand(ChatHandler* handler)
+{
+    Player* p = handler->GetPlayer();
+    if (!p) { handler->SendSysMessage("OllamaChat: this command is for in-game use."); return true; }
+    OllamaChat::CombatDirector::ForceCcFor(p);
+    handler->SendSysMessage("OllamaChat: the director will put the moon on its best crowd-control candidate at its next look (a test hook).");
+    return true;
+}
+
+bool OllamaChatConfigCommand::HandleOllamaDirectorOnCommand(ChatHandler* handler)
+{
+    Player* p = handler->GetPlayer();
+    if (!p) { handler->SendSysMessage("OllamaChat: this command is for in-game use."); return true; }
+    OllamaChat::CombatDirector::SetOffFor(p, false);
+    handler->SendSysMessage("OllamaChat: the combat director is on for this character (when the server has it enabled).");
+    return true;
+}
+
+// The combat director's switches and its last consults (the same ring admin_director_state returns).
+bool OllamaChatConfigCommand::HandleOllamaDirectorStatusCommand(ChatHandler* handler)
+{
+    handler->SendSysMessage(fmt::format(
+        "OllamaChat Director: enable={}, jev site effective={}, minConfidence={:.2f}, interval={}ms, maxCallsPerFight={}, crowdControl={}",
+        sConfigMgr->GetOption<bool>("OllamaChat.Director.Enable", false, false), Jev::EnabledFor(Jev::kSiteDirector), g_JevDirectorMinConfidence,
+        sConfigMgr->GetOption<uint32>("OllamaChat.Director.IntervalMs", 2500, false),
+        sConfigMgr->GetOption<uint32>("OllamaChat.Director.MaxCallsPerFight", 30, false),
+        sConfigMgr->GetOption<bool>("OllamaChat.Director.CrowdControl", true, false)));
+    const nlohmann::json counters = OllamaChat::CombatDirector::Counters();
+    handler->SendSysMessage(fmt::format("  since startup: consults answered={}, yield ticks={}, overrides={}; fights open={}, healers conserving={}, "
+                                        "posture mismatches={}, crowd control released={}",
+                                        counters.value("consults", 0), counters.value("yield_ticks", 0), counters.value("overrides", 0),
+                                        counters.value("fights_open", 0), counters.value("conserving", 0), counters.value("posture_mismatches", 0),
+                                        counters.value("cc_released", 0)));
+    handler->SendSysMessage(fmt::format("  last fight's party: {}", counters.value("last_party", std::string{})));
+    const nlohmann::json recent = OllamaChat::CombatDirector::RecentDecisions(8);
+    if (recent.empty())
+    {
+        handler->SendSysMessage("  no consults since startup");
+        return true;
+    }
+    for (const nlohmann::json& e : recent)
+    {
+        if (e.contains("error"))
+        {
+            handler->SendSysMessage(fmt::format("  no answer: {} ({}ms)", e.value("error", std::string{}), e.value("latency_ms", 0)));
+            continue;
+        }
+        const nlohmann::json& said = e["said"];
+        const nlohmann::json& applied = e["applied"];
+        handler->SendSysMessage(fmt::format(
+            "  {}ms ${:.5f} enemies={} on-focus={}/{} said focus={}({:.2f}) cc={}({:.2f}) posture={}({:.2f}) -> focus='{}' cc='{}' release_cc={} posture='{}'",
+            e.value("latency_ms", 0), e.value("cost_usd", 0.0), e.value("enemies", 0), e.value("focus_followed_by", 0), e.value("attackers", 0),
+            said.value("focus", std::string{}), said.value("focus_conf", 0.0), said.value("cc", std::string{}), said.value("cc_conf", 0.0),
+            said.value("posture", std::string{}), said.value("posture_conf", 0.0), applied.value("focus", std::string{}),
+            applied.value("cc", std::string{}), applied.value("release_cc", false), applied.value("posture", std::string{})));
+        if (!e.value("declined", std::string{}).empty())
+            handler->SendSysMessage(fmt::format("      not applied: {}", e.value("declined", std::string{})));
+    }
+    return true;
+}
+
 bool OllamaChatConfigCommand::HandleOllamaTacticalStatusCommand(ChatHandler* handler, Optional<uint64> botGuid)
 {
     handler->SendSysMessage(fmt::format(

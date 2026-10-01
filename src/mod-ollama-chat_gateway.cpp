@@ -1,5 +1,6 @@
 #include "mod-ollama-chat_gateway.h"
 #include "mod-ollama-chat_promotion.h"
+#include "mod-ollama-chat_ambient.h"
 #include "mod-ollama-chat_config.h"
 #include "mod-ollama-chat_httpclient.h"
 #include "mod-ollama-chat_llmwire.h"
@@ -406,7 +407,9 @@ std::string BuildGatewaySystemPromptEx(uint64_t botGuid, uint64_t playerGuid, co
     // escalations — where the upstream exposes tools with bare names via its
     // own MCP client — to omit botGuid and land "missing required argument"
     // errors that the model would then narrate to the user.
-    if (g_McpEnable && g_McpInjectContextHint && botGuid != 0)
+    // The identity block is also what a memory-keeping gateway reads to tell players apart, so it can be
+    // switched on without opening the MCP server (Gateway.InjectIdentity).
+    if ((g_McpEnable || g_GatewayInjectIdentity) && g_McpInjectContextHint && botGuid != 0)
     {
         std::string hint = "ACTIVE WoW SESSION — your bot's identity is:\n";
         // Names resolved ON THE WORLD THREAD (worldtask.h): this runs on the
@@ -441,6 +444,14 @@ std::string BuildGatewaySystemPromptEx(uint64_t botGuid, uint64_t playerGuid, co
             hint += "2. If a tool's schema lists `playerGuid` as required, you MUST include it with value " + std::to_string(playerGuid) + ".\n";
         hint += "3. If a tool returns 'player not found' or 'missing required argument', report the literal error to the user. NEVER fabricate a story about anyone being offline — those errors mean YOUR call was malformed, not that anyone is disconnected.\n";
         hint += "4. Prefer get_bot_state for bot questions and get_zone_info for zone questions; do not guess.";
+
+        // An advert this bot put in the Trade channel: a player answering it is a buyer, and the bot can really sell.
+        OllamaChat::Ambient::Listing offer;
+        if (OllamaChat::Ambient::GetListing(botGuid, offer))
+            hint += "\n\nYOU ARE SELLING: you advertised " + offer.link + " in the Trade channel, asking " + offer.priceText +
+                    ". If this player wants it (asks the price, says they will take it, or pms you about it), agree in your own words "
+                    "and call bot_sell_by_mail: it mails the item cash on delivery and they pay when they open the mail. "
+                    "Do not sell anything else, and do not promise a different price unless you are haggling down.";
 
         // Promoted bot (promotion.h): the lane's persona is written for the
         // configured fleet. Tell the model WHO it is now, or it answers as the
@@ -510,6 +521,8 @@ std::string BuildGatewaySystemPromptEx(uint64_t botGuid, uint64_t playerGuid, co
             {
                 block += " in_group=false";
             }
+            // Who the bot is as a character and what it is doing: the mind service roleplays from this (race, zone, errands).
+            block += "\nroleplay_context=" + OllamaChat::Ambient::RoleplayContextJson(bot);
             if (!out.empty()) out += "\n\n";
             out += block;
         }
@@ -599,7 +612,7 @@ const std::unordered_set<std::string> kClassifierAllowedActions = {
     "bot_roll", "bot_set_loot_filter", "bot_add_loot_item",
     "bot_remove_loot_item", "bot_invite_to_group", "bot_convert_to_raid",
     "bot_set_group_leader", "bot_uninvite_from_group", "bot_disband_group", "bot_set_loot_method", "bot_set_raid_subgroup", "bot_set_raid_assistant", "bot_raid_ready_check", "bot_set_home",
-    "bot_say", "bot_yell", "bot_trade_give", "bot_accept_trade", "bot_guild_create", "bot_accept_guild_invite", "bot_guild_leave", "bot_split_stack", "bot_stack_combine",
+    "bot_say", "bot_yell", "bot_channel_say", "bot_trade_give", "bot_accept_trade", "bot_guild_create", "bot_accept_guild_invite", "bot_guild_leave", "bot_split_stack", "bot_stack_combine",
     "bot_ah_post", "bot_ah_bid", "bot_ah_cancel",
     "leader_command", "leader_command_all",
 };
@@ -1938,12 +1951,7 @@ bool IsPrivateChannel(int chatChannelSourceLocal)
 bool MessageMentionsBot(const std::string& message, const std::string& botName)
 {
     if (message.empty() || botName.empty()) return false;
-    auto toLower = [](std::string s) {
-        std::transform(s.begin(), s.end(), s.begin(),
-                       [](unsigned char c) { return std::tolower(c); });
-        return s;
-    };
-    return toLower(message).find(toLower(botName)) != std::string::npos;
+    return OllamaChat::Promotion::MentionsName(message, botName);
 }
 
 void WriteGatewayAuditRecord(uint64_t botGuid, uint64_t playerGuid, uint32_t accountId,
@@ -1984,7 +1992,7 @@ void PruneGatewayAuditRows()
 
     QueryResult tableExists = CharacterDatabase.Query(
         "SELECT TABLE_NAME FROM information_schema.tables "
-        "WHERE table_schema = 'acore_characters' AND table_name = 'mod_ollama_chat_gateway_audit'");
+        "WHERE table_schema = DATABASE() AND table_name = 'mod_ollama_chat_gateway_audit'");
     if (!tableExists) return;
 
     CharacterDatabase.Execute(

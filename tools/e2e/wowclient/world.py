@@ -57,9 +57,16 @@ SMSG_PARTY_COMMAND_RESULT = 0x07F
 SMSG_GROUP_DESTROYED = 0x07C
 SMSG_GROUP_UNINVITE = 0x077
 CMSG_SET_SELECTION = 0x13D
+CMSG_BEGIN_TRADE = 0x117
+CMSG_ACCEPT_TRADE = 0x11A
+CMSG_CANCEL_TRADE = 0x11C
+SMSG_TRADE_STATUS = 0x120
+SMSG_TRADE_STATUS_EXTENDED = 0x121
+SMSG_CHANNEL_NOTIFY = 0x099
 CMSG_LOGOUT_REQUEST = 0x04B
 SMSG_LOGOUT_COMPLETE = 0x04D
 SMSG_WARDEN_DATA = 0x2E6
+MSG_RAID_TARGET_UPDATE = 0x321   # a raid mark placed on / taken off a unit (skull = slot 7, moon = slot 4)
 
 AUTH_OK = 0x0C
 CHAR_CREATE_SUCCESS = 0x2F
@@ -67,6 +74,7 @@ CHAR_CREATE_SUCCESS = 0x2F
 # chat types (SharedDefines.h)
 CHAT_SYSTEM, CHAT_SAY, CHAT_PARTY, CHAT_WHISPER, CHAT_WHISPER_INFORM = 0x00, 0x01, 0x02, 0x07, 0x09
 CHAT_PARTY_LEADER = 0x33
+CHAT_GUILD, CHAT_OFFICER, CHAT_YELL, CHAT_CHANNEL = 0x04, 0x05, 0x06, 0x11
 # ChatHandler::BuildChatPacket layout groups (enum values from the deployed SharedDefines.h)
 _NAMED_SENDER = {0x0C, 0x0D, 0x0E, 0x0F, 0x10, 0x29, 0x2A, 0x2F}  # monster say/party/yell/whisper/emote, boss emote/whisper, battlenet
 _WHISPER_FOREIGN = 0x08
@@ -99,6 +107,9 @@ class ChatEvent:
     sender_name: str
     text: str
     gm: bool = False
+    channel: str = ""        # the channel's name for a channel line ("General - Elwynn Forest", "Ascension")
+    # WSL2 steps the wall clock by seconds now and then, which makes `ts` useless for measuring the gap between two lines.
+    mono: float = field(default_factory=time.monotonic)
 
 
 @dataclass
@@ -106,6 +117,7 @@ class Event:
     ts: float
     kind: str
     data: dict = field(default_factory=dict)
+    mono: float = 0.0   # time.monotonic() when it arrived: WSL2's wall clock jumps by seconds, so measure gaps with this
 
 
 # Header cipher keys, AuthCrypt.cpp: the server ENCRYPTS with HMAC(ServerEncryptionKey, K)
@@ -224,19 +236,18 @@ class WorldClient:
         return out
 
     def _read_packet(self) -> tuple[int, bytes]:
-        if self._rx_cipher is None:
-            head = self._recv_exact(4)
-            size, opcode = struct.unpack(">H", head[:2])[0], struct.unpack("<H", head[2:])[0]
+        # Plaintext headers (before AUTH_SESSION, or for the whole session on a realm with CoA.PlaintextWorldHeaders) use
+        # the same layout as encrypted ones, minus the cipher.
+        undo = self._rx_cipher.apply if self._rx_cipher is not None else (lambda data: data)
+        first = undo(self._recv_exact(1))
+        if first[0] & 0x80:   # large packet: 3-byte size
+            rest = undo(self._recv_exact(4))
+            size = ((first[0] & 0x7F) << 16) | (rest[0] << 8) | rest[1]
+            opcode = struct.unpack("<H", rest[2:4])[0]
         else:
-            first = self._rx_cipher.apply(self._recv_exact(1))
-            if first[0] & 0x80:   # large packet: 3-byte size
-                rest = self._rx_cipher.apply(self._recv_exact(4))
-                size = ((first[0] & 0x7F) << 16) | (rest[0] << 8) | rest[1]
-                opcode = struct.unpack("<H", rest[2:4])[0]
-            else:
-                rest = self._rx_cipher.apply(self._recv_exact(3))
-                size = (first[0] << 8) | rest[0]
-                opcode = struct.unpack("<H", rest[1:3])[0]
+            rest = undo(self._recv_exact(3))
+            size = (first[0] << 8) | rest[0]
+            opcode = struct.unpack("<H", rest[1:3])[0]
         body = self._recv_exact(size - 2)
         return opcode, body
 
@@ -276,9 +287,10 @@ class WorldClient:
             + addons
         )
         self.send(CMSG_AUTH_SESSION, payload)
-        # Everything after AUTH_SESSION has encrypted headers, both directions.
-        self._rx_cipher = _Rc4(hmac.new(_SERVER_ENCRYPTION_KEY, self.session_key, hashlib.sha1).digest())
-        self._tx_cipher = _Rc4(hmac.new(_SERVER_DECRYPTION_KEY, self.session_key, hashlib.sha1).digest())
+        # Everything after AUTH_SESSION has encrypted headers, both directions, unless the realm keeps them plaintext
+        # (CoA.PlaintextWorldHeaders, for the Ascension client): then set WOWCLIENT_PLAINTEXT_HEADERS=1.
+        if os.environ.get("WOWCLIENT_PLAINTEXT_HEADERS") != "1":
+            self._start_header_encryption()
 
         opcode, body = self._read_packet()
         if opcode == SMSG_WARDEN_DATA:
@@ -288,6 +300,10 @@ class WorldClient:
         result = body[0]
         if result != AUTH_OK:
             raise WorldError(f"world auth failed: result={result:#x}")
+
+    def _start_header_encryption(self) -> None:
+        self._rx_cipher = _Rc4(hmac.new(_SERVER_ENCRYPTION_KEY, self.session_key, hashlib.sha1).digest())
+        self._tx_cipher = _Rc4(hmac.new(_SERVER_DECRYPTION_KEY, self.session_key, hashlib.sha1).digest())
 
     # ---- reader / dispatcher --------------------------------------------
     def _read_loop(self) -> None:
@@ -305,7 +321,7 @@ class WorldClient:
 
     def _event(self, kind: str, **data) -> None:
         with self._lock:
-            self.events.append(Event(time.time(), kind, data))
+            self.events.append(Event(time.time(), kind, data, time.monotonic()))
 
     def _dispatch(self, opcode: int, body: bytes) -> None:
         if opcode == SMSG_TIME_SYNC_REQ:
@@ -349,6 +365,17 @@ class WorldClient:
             op = b.u32()
             name = b.cstr()
             self._event("party_result", op=op, name=name, result=b.u32())
+        elif opcode == SMSG_CHANNEL_NOTIFY:
+            b = _Buf(body)
+            kind = b.u8()          # 2 = you joined, 3 = you left
+            self._event("channel_notify", type=kind, name=b.cstr())
+        elif opcode == SMSG_TRADE_STATUS:
+            # status 1 = someone wants to trade with us (the client shows a popup and answers with CMSG_BEGIN_TRADE),
+            # 2 = the window opens, 3 = cancelled, 8 = complete.
+            status = struct.unpack("<I", body[:4])[0] if len(body) >= 4 else -1
+            self._event("trade_status", status=status, size=len(body))
+        elif opcode == SMSG_TRADE_STATUS_EXTENDED:
+            self._event("trade_extended", size=len(body), items=body[13:14].hex() if len(body) > 13 else "")
         elif opcode == SMSG_LOGIN_VERIFY_WORLD:
             self.in_world = True
             self._event("in_world", map=struct.unpack("<I", body[:4])[0])
@@ -356,6 +383,17 @@ class WorldClient:
             self._event("logout_complete")
         elif opcode == SMSG_WARDEN_DATA:
             self._event("warden", size=len(body))
+        elif opcode == MSG_RAID_TARGET_UPDATE:
+            # type 0: one slot changed (setter guid, slot, target guid; target 0 = cleared); type 1: the whole list.
+            b = _Buf(body)
+            if b.u8() == 0 and len(body) >= 18:
+                b.u64()
+                slot = b.u8()
+                self._event("raid_target", slot=slot, target=b.u64())
+            else:
+                while len(body) - b.o >= 9:
+                    slot = b.u8()
+                    self._event("raid_target", slot=slot, target=b.u64())
         else:
             self._inbox.put((opcode, body))
 
@@ -366,6 +404,7 @@ class WorldClient:
         sender = b.u64()
         b.u32()          # flags
         sender_name = ""
+        channel = ""
         if ctype in _NAMED_SENDER:
             b.u32()
             sender_name = b.cstr()
@@ -390,7 +429,7 @@ class WorldClient:
                 b.u32()
                 sender_name = b.cstr()
             if ctype == _CHANNEL:
-                b.cstr()
+                channel = b.cstr()
             b.u64()      # receiver
         b.u32()          # message length incl. NUL
         text = b.cstr()
@@ -399,7 +438,7 @@ class WorldClient:
             if not sender_name and sender:
                 self.name_query(sender)   # the reply backfills this event (see NAME_QUERY_RESPONSE)
         with self._lock:
-            self.chat.append(ChatEvent(time.time(), ctype, sender, sender_name, text, gm))
+            self.chat.append(ChatEvent(time.time(), ctype, sender, sender_name, text, gm, channel))
 
     def _keepalive_loop(self) -> None:
         seq = 0
@@ -492,6 +531,30 @@ class WorldClient:
     def invite(self, name: str) -> None:
         self.send(CMSG_GROUP_INVITE, name.encode() + b"\0" + struct.pack("<I", 0))
 
+    def set_raid_mark(self, slot: int, target_guid: int = 0) -> None:
+        """Put the raid mark `slot` (skull = 7, moon = 4) on a unit, or take it off with guid 0. The leader's (and assistants') right."""
+        self.send(MSG_RAID_TARGET_UPDATE, struct.pack("<BQ", slot, target_guid))
+
+    def begin_trade(self) -> None:
+        """Answer a trade request (the Accept button on the "wants to trade" popup)."""
+        self.send(CMSG_BEGIN_TRADE)
+
+    def accept_trade(self, trade_id: int = 0) -> None:
+        self.send(CMSG_ACCEPT_TRADE, struct.pack("<I", trade_id))
+
+    def cancel_trade(self) -> None:
+        self.send(CMSG_CANCEL_TRADE)
+
+    def yell(self, text: str) -> None:
+        self.send(CMSG_MESSAGECHAT, struct.pack("<II", CHAT_YELL, LANG_ORCISH) + text.encode() + b"\0")
+
+    def guild(self, text: str) -> None:
+        self.send(CMSG_MESSAGECHAT, struct.pack("<II", CHAT_GUILD, LANG_ORCISH) + text.encode() + b"\0")
+
+    def channel(self, name: str, text: str) -> None:
+        """Speak in a channel the player is in (the zone channel joins on its own when the player enters the zone)."""
+        self.send(CMSG_MESSAGECHAT, struct.pack("<II", CHAT_CHANNEL, LANG_ORCISH) + name.encode() + b"\0" + text.encode() + b"\0")
+
     def accept_invite(self) -> None:
         self.send(CMSG_GROUP_ACCEPT, struct.pack("<I", 0))
 
@@ -521,6 +584,15 @@ class WorldClient:
         with self._lock:
             return [c for c in self.chat if c.ts >= t]
 
+    def chat_since_mono(self, t: float) -> list[ChatEvent]:
+        """chat_since on the monotonic clock (time.monotonic()), for measuring how far apart lines arrive."""
+        with self._lock:
+            return [c for c in self.chat if c.mono >= t]
+
     def events_since(self, t: float, kind: str | None = None) -> list[Event]:
         with self._lock:
             return [e for e in self.events if e.ts >= t and (kind is None or e.kind == kind)]
+
+    def events_since_mono(self, t: float, kind: str | None = None) -> list[Event]:
+        with self._lock:
+            return [e for e in self.events if e.mono >= t and (kind is None or e.kind == kind)]

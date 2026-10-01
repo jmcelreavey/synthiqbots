@@ -1,6 +1,7 @@
 #ifndef OLLAMA_HTTP_CLIENT_H
 #define OLLAMA_HTTP_CLIENT_H
 
+#include <cstdint>
 #include <string>
 #include <vector>
 #include <utility>

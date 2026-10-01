@@ -1,3 +1,4 @@
+#include <vector>
 #include "mod-ollama-chat_promotion.h"
 #include "mod-ollama-chat_config.h"
 #include "mod-ollama-chat_fleet.h"
@@ -271,6 +272,81 @@ namespace OllamaChat::Promotion
         return IsOperatorImpl(p);
     }
 
+    // The shorthand a player used to address someone ("Hey Ed", "Ed, how are you", "thanks ed"), or "" when the line holds none.
+    std::string NicknameToken(const std::string& message)
+    {
+        static const std::unordered_set<std::string> notNames = {
+            "all", "guys", "everyone", "everybody", "there", "you", "u", "folks", "people", "chat", "yall", "peeps", "team", "gang",
+            "anyone", "anybody", "man", "dude", "bro", "mate", "mates", "friend", "friends", "buddy", "bud", "pal", "fellas", "lads",
+            "ladies", "gents", "world", "realm", "trade", "general", "group", "party", "both", "again", "back", "good", "morning",
+            "evening", "night", "bot", "bots", "guild", "tank", "healer", "dps", "mod", "admin", "gm", "sir", "boss", "chief", "mister",
+            "miss", "lol", "haha", "lmao", "please", "pls", "plz", "thanks", "thank", "thx", "ty", "hey", "hi", "hello", "yo", "sup",
+            "the", "and", "but", "for", "how", "what", "who", "why", "when", "where", "can", "could", "would", "should", "does", "did",
+            "are", "was", "were", "has", "have", "had", "not", "any", "some", "one", "two", "its", "it's", "im", "i'm", "ive", "i've",
+            "well", "so", "ok", "okay", "right", "sure", "yes", "yeah", "yep", "nope", "nah", "no", "now", "then", "here", "this",
+            "that", "these", "those", "with", "from", "about", "just", "also", "very", "too", "much", "many", "more", "most", "all"};
+        static const std::unordered_set<std::string> greetings = {
+            "hey", "hi", "hello", "yo", "sup", "oi", "hiya", "heya", "howdy", "ok", "okay", "thanks", "thx", "ty", "cheers", "thank", "you"};
+
+        struct Token { std::string word; size_t begin; size_t end; };
+        std::vector<Token> tokens;
+        for (size_t i = 0; i < message.size();)
+        {
+            if (std::isalnum(static_cast<unsigned char>(message[i])) || message[i] == '\'')
+            {
+                size_t j = i;
+                std::string word;
+                while (j < message.size() && (std::isalnum(static_cast<unsigned char>(message[j])) || message[j] == '\''))
+                    word += static_cast<char>(std::tolower(static_cast<unsigned char>(message[j++])));
+                tokens.push_back({word, i, j});
+                i = j;
+            }
+            else
+                ++i;
+        }
+        if (tokens.empty())
+            return "";
+
+        auto usable = [](const std::string& word, size_t minLength) { return word.size() >= minLength && !notNames.count(word) && !std::isdigit(static_cast<unsigned char>(word[0])); };
+        // What sits between token i and the next one (or the end): punctuation such as ", " or "?".
+        auto after = [&](size_t i) { return message.substr(tokens[i].end, (i + 1 < tokens.size() ? tokens[i + 1].begin : message.size()) - tokens[i].end); };
+        auto before = [&](size_t i) { return message.substr(i ? tokens[i - 1].end : 0, tokens[i].begin - (i ? tokens[i - 1].end : 0)); };
+        auto hasAny = [](const std::string& text, const char* chars) { return text.find_first_of(chars) != std::string::npos; };
+
+        // "@ed"
+        for (size_t i = 0; i < tokens.size(); ++i)
+            if (tokens[i].begin > 0 && message[tokens[i].begin - 1] == '@' && usable(tokens[i].word, 2))
+                return tokens[i].word;
+        // "ed, how are you" / "ed: hi": the line opens with a name and a pause
+        if (tokens.size() > 1 && hasAny(after(0), ",:;-") && usable(tokens[0].word, 2))
+            return tokens[0].word;
+        // "hey ed" / "thanks ed": a greeting, then the name
+        for (size_t i = 1; i < tokens.size(); ++i)
+            if (greetings.count(tokens[i - 1].word) && !hasAny(before(i), ".!?") && usable(tokens[i].word, 2) && (tokens[i - 1].word != "you"))
+                return tokens[i].word;
+        // "how are you, ed?": the line ends with a name after a comma
+        const size_t last = tokens.size() - 1;
+        if (last > 0 && hasAny(before(last), ",") && !hasAny(after(last), ",") && usable(tokens[last].word, 2))
+            return tokens[last].word;
+        // "ed how are you today": the line opens with a name and no pause; only a name-length word counts
+        bool asksSomeone = message.find('?') != std::string::npos;
+        for (size_t i = 1; i < tokens.size() && !asksSomeone; ++i)
+            asksSomeone = tokens[i].word == "you" || tokens[i].word == "u" || tokens[i].word == "your" || tokens[i].word == "ur";
+        if (tokens.size() > 2 && asksSomeone && usable(tokens[0].word, 3))
+            return tokens[0].word;
+        return "";
+    }
+
+    std::string ShortName(const std::string& name)
+    {
+        static const std::string suffix = " bot";
+        if (name.size() < suffix.size() + 3)
+            return name;
+        std::string tail = name.substr(name.size() - suffix.size());
+        std::transform(tail.begin(), tail.end(), tail.begin(), [](unsigned char c) { return std::tolower(c); });
+        return tail == suffix ? name.substr(0, name.size() - suffix.size()) : name;
+    }
+
     bool MentionsName(const std::string& message, const std::string& name)
     {
         if (message.empty() || name.empty())
@@ -281,16 +357,19 @@ namespace OllamaChat::Promotion
             return v;
         };
         const std::string msg = lower(message);
-        const std::string needle = lower(name);
-        for (size_t pos = msg.find(needle); pos != std::string::npos; pos = msg.find(needle, pos + 1))
+        auto contains = [&msg](const std::string& needle)
         {
-            const bool startOk = pos == 0 || !std::isalnum(static_cast<unsigned char>(msg[pos - 1]));
-            const size_t end = pos + needle.size();
-            const bool endOk = end >= msg.size() || !std::isalnum(static_cast<unsigned char>(msg[end]));
-            if (startOk && endOk)
-                return true;
-        }
-        return false;
+            for (size_t pos = msg.find(needle); pos != std::string::npos; pos = msg.find(needle, pos + 1))
+            {
+                const bool startOk = pos == 0 || !std::isalnum(static_cast<unsigned char>(msg[pos - 1]));
+                const size_t end = pos + needle.size();
+                const bool endOk = end >= msg.size() || !std::isalnum(static_cast<unsigned char>(msg[end]));
+                if (startOk && endOk)
+                    return true;
+            }
+            return false;
+        };
+        return contains(lower(name)) || contains(lower(ShortName(name)));
     }
 
     bool IsSourceAllowed(int chatChannelSourceLocal)
@@ -329,6 +408,16 @@ namespace OllamaChat::Promotion
                 have = true;
             }
         }
+        // No fleet, no template bot: a realm that only sets the global Gateway.Url (one gateway for every bot,
+        // e.g. the SquidBots mind service) still gets promotion, using that same URL, token and model.
+        if (!have && !g_GatewayUrl.empty())
+        {
+            tpl.url         = g_GatewayUrl;
+            tpl.bearerToken = g_GatewayBearerToken;
+            tpl.model       = g_GatewayModel;
+            tpl.gatewayType = g_GatewayType;
+            have = true;
+        }
 
         {
             std::lock_guard<std::mutex> lock(s_mutex);
@@ -343,8 +432,9 @@ namespace OllamaChat::Promotion
 
         if (g_PromoteEnable && !have)
             LOG_ERROR("server.loading",
-                      "[Ollama Chat Promote] enabled but template bot guid={} has no gateway override "
-                      "(set Gateway.Promote.TemplateBotGuid to a bot in gateway_overrides.json) — promotion is off",
+                      "[Ollama Chat Promote] enabled but template bot guid={} has no gateway override and "
+                      "Gateway.Url is empty (set Gateway.Url, or Gateway.Promote.TemplateBotGuid to a bot in "
+                      "gateway_overrides.json) — promotion is off",
                       templateGuid);
         else if (g_PromoteEnable)
             LOG_INFO("server.loading",

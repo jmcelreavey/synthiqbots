@@ -69,6 +69,10 @@ about a second; longer questions go to the full agent with tools.
 emotes, with limits on chatter so it never floods your screen. Combat itself stays with playerbots,
 which already fights well.
 
+<img src="./assets/icons/icon-leader.png" width="32" alt=""> **A director for the fight (opt-in).** While your party fights, a fast decision model picks the enemy to
+kill first (a skull appears on it and a companion says so in its own voice), which one to crowd-control and whether the healers should ration mana. Playerbots
+still casts every spell, and the director backs off any mark you put up yourself.
+
 <img src="./assets/icons/icon-voice.png" width="32" alt=""> **Command by voice.** Hold a push-to-talk key in the desktop app (macOS / Windows), speak, and the
 leader acts and replies — no alt-tabbing to type.
 
@@ -148,6 +152,7 @@ The full walkthrough, including party/fleet setup, lives in [docs/gateway.md](do
 | Any bot you whisper or invite gets the brain | [docs/bot-promotion.md](docs/bot-promotion.md) |
 | A leader bot running a party of bots | [docs/autonomous-bots.md](docs/autonomous-bots.md) |
 | The per-bot tactical loop | [docs/tactical.md](docs/tactical.md) |
+| The combat director (focus target, crowd control, healer mana) | [docs/director.md](docs/director.md) |
 | The leader proposing quests and dungeons | [docs/proactive-leader.md](docs/proactive-leader.md) |
 | Voice commands and the desktop app | [docs/voice-command.md](docs/voice-command.md), [docs/voice-command-app.md](docs/voice-command-app.md) |
 | The SynthiqBots UI client addon | [docs/synthiqbots-ui.md](docs/synthiqbots-ui.md) |

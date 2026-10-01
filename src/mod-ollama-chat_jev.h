@@ -35,6 +35,7 @@ namespace Jev
     constexpr const char* kSitePlanner    = "planner";      // E — planner veto (decision half)
     constexpr const char* kSiteTactical   = "tactical";     // B — per-tick action funnel (PR 2)
     constexpr const char* kSitePlaybook   = "playbook";     // leader playbook relevance filter (PR 3)
+    constexpr const char* kSiteDirector   = "director";     // combat director: focus / crowd-control / posture picks
 
     // Leader playbook compaction: score every workflow row of
     // Mcp.Leader.SystemPromptFile against the player's message (one Noul per

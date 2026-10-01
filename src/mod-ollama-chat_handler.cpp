@@ -25,8 +25,22 @@
 #include "mod-ollama-chat_playerprefs.h"
 #include "mod-ollama-chat_proactive.h"
 #include "mod-ollama-chat_promotion.h"
+#include "mod-ollama-chat_ambient.h"
+#include "mod-ollama-chat_worldtask.h"
 #include "SharedDefines.h"
 #include "Group.h"
+
+namespace
+{
+    // True when the channel's name contains any of the configured fragments.
+    bool ChannelNameMatches(const std::string& channelName, const std::vector<std::string>& fragments)
+    {
+        for (const std::string& fragment : fragments)
+            if (!fragment.empty() && channelName.find(fragment) != std::string::npos)
+                return true;
+        return false;
+    }
+}
 
 // Forward declarations for internal helper functions.
 static bool IsBotEligibleForChatChannelLocal(Player* bot, Player* player,
@@ -109,6 +123,11 @@ bool PlayerBotChatHandler::OnPlayerCanUseChat(Player* player, uint32_t type, uin
     if (!g_Enable)
         return true;
 
+    // A playerbots stock line ("Took [quest]. Time to dive in.") with a whitelisted player in earshot is said again in the
+    // bot's own voice instead (ambient.h). Everything else is untouched.
+    if (OllamaChat::Ambient::MaybeRewrite(player, type, msg, nullptr))
+        return false;
+
     ChatChannelSourceLocal sourceLocal = GetChannelSourceLocal(type);
     ProcessChat(player, type, lang, msg, sourceLocal, nullptr, nullptr);
     return true;
@@ -138,6 +157,9 @@ bool PlayerBotChatHandler::OnPlayerCanUseChat(Player* player, uint32_t type, uin
 {
     if (!g_Enable)
         return true;
+
+    if (OllamaChat::Ambient::MaybeRewrite(player, type, msg, channel))
+        return false;
 
     ChatChannelSourceLocal sourceLocal = GetChannelSourceLocal(type);
     ProcessChat(player, type, lang, msg, sourceLocal, channel, nullptr);
@@ -269,6 +291,33 @@ void SaveBotConversationHistoryToDB()
     CharacterDatabase.Execute(SafeFormat(cleanupQuery, g_MaxConversationHistory));
 }
 
+namespace
+{
+// Lines a player types to give a playerbot an order ("follow", "co +passive", "@tank nc -coa auto pull", "formation
+// circle"). Playerbots acts on them itself, so a model reply on top is wasted tokens and a second bot voice in chat.
+// SquidBots Lite (the CoA addon) sends these constantly, in party chat and by whisper.
+bool IsPlayerbotsCommandLine(std::string const& text)
+{
+    std::string line = text;
+    while (!line.empty() && std::isspace(static_cast<unsigned char>(line.front()))) line.erase(line.begin());
+    while (!line.empty() && std::isspace(static_cast<unsigned char>(line.back()))) line.pop_back();
+    for (auto& c : line) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+    if (line.empty())
+        return false;
+    static const std::unordered_set<std::string> exact = {
+        "co", "nc", "ss", "help", "stats", "ra", "ri", "ro", "rl", "rti", "reset", "revive", "release", "stay", "follow",
+        "stop", "attack", "grind", "pull", "flee", "autogear", "gear", "maintenance", "disperse", "roll", "summon", "repair",
+        "leave", "logout"
+    };
+    if (exact.count(line))
+        return true;
+    for (char const* prefix : { "co ", "nc ", "ss ", "rti ", "formation ", "focus heal", "reset ", "@" })
+        if (line.rfind(prefix, 0) == 0)
+            return true;
+    return false;
+}
+} // namespace
+
 void PlayerBotChatHandler::ProcessChat(Player* player, uint32_t type, uint32_t lang, std::string& msg, ChatChannelSourceLocal sourceLocal, Channel* channel, Player* receiver)
 {
     if (player == nullptr) {
@@ -279,6 +328,7 @@ void PlayerBotChatHandler::ProcessChat(Player* player, uint32_t type, uint32_t l
         return;
     }
     if (lang == LANG_ADDON) return;
+    if (IsPlayerbotsCommandLine(msg)) return;
 
     // Feature 002 — proactive leader bot intent tap-in. Short-circuits the
     // regular chat chain when the player is answering an open proposal
@@ -447,11 +497,9 @@ void PlayerBotChatHandler::ProcessChat(Player* player, uint32_t type, uint32_t l
                 continue;
             
             // Check if this is a local or global channel
-            bool isLocalChannel = (channel->GetName().find("General -") != std::string::npos || 
-                                  channel->GetName().find("Trade -") != std::string::npos ||
-                                  channel->GetName().find("LocalDefense -") != std::string::npos);
+            bool isLocalChannel = ChannelNameMatches(channel->GetName(), g_LocalChannelNames);
             
-            bool isGlobalChannel = (channel->GetName().find("World") != std::string::npos || channel->GetName().find("LookingForGroup") != std::string::npos);
+            bool isGlobalChannel = ChannelNameMatches(channel->GetName(), g_GlobalChannelNames);
         
             // For local channels, bot must be in same zone as player
             if (isLocalChannel)
@@ -701,6 +749,10 @@ void PlayerBotChatHandler::ProcessChat(Player* player, uint32_t type, uint32_t l
         chance = senderIsBot ? g_BotReplyChance_Say : g_PlayerReplyChance_Say;
     }
     
+    // A bot answering a line that an ambient reply just put in another bot's mouth: the conversation chance applies.
+    if (senderIsBot && OllamaChat::Ambient::IsSceneLine(player->GetGUID().GetRawValue(), msg))
+        chance = OllamaChat::Ambient::ChainChancePercent();
+
     if(g_DebugEnabled)
     {
         LOG_INFO("server.loading", "[Ollama Chat] Sender: {} ({}), Channel: {}, Reply Chance: {}%, Candidate Bots: {}",
@@ -708,6 +760,9 @@ void PlayerBotChatHandler::ProcessChat(Player* player, uint32_t type, uint32_t l
     }
     
     std::vector<Player*> finalCandidates;
+    // Bots this line is aimed at: the one named, the one already in conversation with the player, the one asked for an invite.
+    // They are answered by the ordinary path that can act (and is written in the bot's own voice), not as ambient chatter.
+    std::unordered_set<uint64_t> addressedBots;
     
     // For whispers, handle directly - there should only be one receiver bot
     if (sourceLocal == SRC_WHISPER_LOCAL)
@@ -715,7 +770,8 @@ void PlayerBotChatHandler::ProcessChat(Player* player, uint32_t type, uint32_t l
         if (!candidateBots.empty())
         {
             Player* whisperBot = candidateBots[0]; // Should only be one bot for whispers
-            if (!(g_DisableRepliesInCombat && whisperBot->IsInCombat()))
+            // A whisper is addressed to this bot by definition.
+            if (!(g_DisableRepliesInCombat && whisperBot->IsInCombat() && !g_AnswerAddressedInCombat))
             {
                 finalCandidates.push_back(whisperBot);
                 if(g_DebugEnabled)
@@ -740,28 +796,51 @@ void PlayerBotChatHandler::ProcessChat(Player* player, uint32_t type, uint32_t l
             return result;
         };
 
+        // Helper: does a lowercased line hold this word, as a whole word
+        auto isWordIn = [](const std::string& lowerText, const std::string& word) -> bool {
+            for (size_t pos = lowerText.find(word); pos != std::string::npos; pos = lowerText.find(word, pos + 1))
+            {
+                const bool startOk = pos == 0 || !std::isalnum(static_cast<unsigned char>(lowerText[pos - 1]));
+                const size_t end = pos + word.size();
+                const bool endOk = end >= lowerText.size() || !std::isalnum(static_cast<unsigned char>(lowerText[end]));
+                if (startOk && endOk)
+                    return true;
+            }
+            return false;
+        };
+
         // Helper to check if a bot name is mentioned as a complete word
         auto isBotNameMentioned = [&trimmedMsg, &toLowerStr](const std::string& botName) -> size_t {
-            std::string lowerMsg = toLowerStr(trimmedMsg);
-            std::string lowerBotName = toLowerStr(botName);
-            
-            size_t pos = 0;
-            while ((pos = lowerMsg.find(lowerBotName, pos)) != std::string::npos)
-            {
-                // Check if it's a word boundary before the name
-                bool validStart = (pos == 0 || !std::isalnum(static_cast<unsigned char>(lowerMsg[pos - 1])));
-                // Check if it's a word boundary after the name
-                size_t endPos = pos + lowerBotName.length();
-                bool validEnd = (endPos >= lowerMsg.length() || !std::isalnum(static_cast<unsigned char>(lowerMsg[endPos])));
-                
-                if (validStart && validEnd)
+            const std::string lowerMsg = toLowerStr(trimmedMsg);
+            auto findWord = [&lowerMsg](const std::string& lowerBotName) -> size_t {
+                size_t pos = 0;
+                while ((pos = lowerMsg.find(lowerBotName, pos)) != std::string::npos)
                 {
-                    return pos; // Found a valid word-boundary match
+                    // Check if it's a word boundary before the name
+                    bool validStart = (pos == 0 || !std::isalnum(static_cast<unsigned char>(lowerMsg[pos - 1])));
+                    // Check if it's a word boundary after the name
+                    size_t endPos = pos + lowerBotName.length();
+                    bool validEnd = (endPos >= lowerMsg.length() || !std::isalnum(static_cast<unsigned char>(lowerMsg[endPos])));
+                    
+                    if (validStart && validEnd)
+                    {
+                        return pos; // Found a valid word-boundary match
+                    }
+                    pos++; // Continue searching
                 }
-                pos++; // Continue searching
-            }
-            return std::string::npos;
+                return std::string::npos;
+            };
+            // "Flutki Bot" is called "Flutki" in chat: either form names the bot.
+            size_t pos = findWord(toLowerStr(botName));
+            if (pos == std::string::npos)
+                pos = findWord(toLowerStr(OllamaChat::Promotion::ShortName(botName)));
+            return pos;
         };
+
+        // The bot already in conversation with this player, if any: "how are you?" goes to them unnamed, and "Hey Ed" prefers
+        // the Ed who is talking.
+        const uint64_t partnerGuid = (!senderIsBot && OllamaChat::Promotion::IsOperator(player))
+            ? OllamaChat::Ambient::PartnerOf(player, sourceLocal, channel) : 0;
 
         for (Player* bot : candidateBots)
         {
@@ -769,12 +848,14 @@ void PlayerBotChatHandler::ProcessChat(Player* player, uint32_t type, uint32_t l
             {
                 continue;
             }
-            if (g_DisableRepliesInCombat && bot->IsInCombat())
+            size_t pos = isBotNameMentioned(bot->GetName());
+            // Busy bots stay quiet unless a player spoke to them by name and AnswerAddressedInCombat is on: a bot
+            // that grinds is in combat most of the time, and would otherwise never answer.
+            if (g_DisableRepliesInCombat && bot->IsInCombat() && !(g_AnswerAddressedInCombat && pos != std::string::npos))
             {
                 continue;
             }
             
-            size_t pos = isBotNameMentioned(bot->GetName());
             if (pos != std::string::npos)
             {
                 mentionedBots.emplace_back(pos, bot);
@@ -785,15 +866,51 @@ void PlayerBotChatHandler::ProcessChat(Player* player, uint32_t type, uint32_t l
             }
         }
 
+        // "Hey Ed": nobody is named in full, but the line talks to somebody by a short form of their name. It counts when exactly
+        // one bot answers to it, or one of them is the partner or spoke lately; two strangers named Ed* are not guessed between.
+        if (mentionedBots.empty() && !senderIsBot)
+        {
+            const std::string token = OllamaChat::Promotion::NicknameToken(trimmedMsg);
+            if (!token.empty())
+            {
+                Player* best = nullptr;
+                time_t bestAt = 0;
+                uint32_t matches = 0;
+                for (Player* bot : candidateBots)
+                {
+                    if (!bot || (g_DisableRepliesInCombat && bot->IsInCombat() && !g_AnswerAddressedInCombat))
+                        continue;
+                    const std::string shortLower = toLowerStr(OllamaChat::Promotion::ShortName(bot->GetName()));
+                    if (shortLower.size() < token.size() || shortLower.compare(0, token.size(), token) != 0)
+                        continue;
+                    ++matches;
+                    const uint64_t guid = bot->GetGUID().GetRawValue();
+                    const time_t at = guid == partnerGuid ? time(nullptr) + 1 : OllamaChat::Ambient::LastSpokeAt(guid);
+                    if (!best || at > bestAt)
+                    {
+                        best = bot;
+                        bestAt = at;
+                    }
+                }
+                if (best && (matches == 1 || bestAt > 0))
+                {
+                    mentionedBots.emplace_back(0, best);
+                    if (g_DebugEnabled)
+                        LOG_INFO("server.loading", "[Ollama Chat] Bot {} addressed by the short name '{}' ({} matched)", best->GetName(), token, matches);
+                }
+            }
+        }
+
         if (!mentionedBots.empty())
         {
             // Sort by position to get the first mentioned bot
             std::sort(mentionedBots.begin(), mentionedBots.end(),
                       [](const std::pair<size_t, Player*> &a, const std::pair<size_t, Player*> &b) { return a.first < b.first; });
             Player* chosen = mentionedBots.front().second;
-            if (!(g_DisableRepliesInCombat && chosen->IsInCombat()))
+            if (!(g_DisableRepliesInCombat && chosen->IsInCombat() && !g_AnswerAddressedInCombat))
             {
                 finalCandidates.push_back(chosen);
+                addressedBots.insert(chosen->GetGUID().GetRawValue());
                 if(g_DebugEnabled)
                 {
                     LOG_INFO("server.loading", "[Ollama Chat] Bot {} selected (mentioned first at position {})", 
@@ -803,8 +920,60 @@ void PlayerBotChatHandler::ProcessChat(Player* player, uint32_t type, uint32_t l
         }
         else
         {
+            // Nobody is named. A player who keeps talking after a bot answered expects that bot to answer again, and "someone
+            // invite me" is for one bot to act on, not for everyone to joke about.
+            Player* partnerBot = nullptr;
+            bool inviteRequest = false;
+            bool toTheRoom = false;
+            if (!senderIsBot && OllamaChat::Promotion::IsOperator(player))
+            {
+                if (partnerGuid)
+                {
+                    for (Player* bot : candidateBots)
+                    {
+                        if (bot && bot->GetGUID().GetRawValue() == partnerGuid && bot->IsAlive() && !bot->IsInFlight()
+                            && !(g_DisableRepliesInCombat && bot->IsInCombat() && !g_AnswerAddressedInCombat))
+                        {
+                            partnerBot = bot;
+                            break;
+                        }
+                    }
+                }
+                if (!partnerBot && !player->GetGroup() && OllamaChat::Ambient::IsInviteRequest(trimmedMsg))
+                {
+                    std::vector<Player*> inviters;
+                    for (Player* bot : candidateBots)
+                    {
+                        // Only the player's own faction can group with them, and a bot already in a group has one to keep.
+                        if (bot && bot->IsAlive() && !bot->IsInCombat() && !bot->IsInFlight() && !bot->GetGroup()
+                            && bot->GetTeamId() == player->GetTeamId())
+                            inviters.push_back(bot);
+                    }
+                    if (!inviters.empty())
+                    {
+                        partnerBot = inviters[urand(0, inviters.size() - 1)];
+                        inviteRequest = true;
+                    }
+                }
+                const std::string lowerMsg = toLowerStr(trimmedMsg);
+                for (const char* word : {"anyone", "anybody", "everyone", "everybody", "guys", "all"})
+                    if (isWordIn(lowerMsg, word))
+                        toTheRoom = true;
+            }
+            if (partnerBot)
+            {
+                finalCandidates.push_back(partnerBot);
+                addressedBots.insert(partnerBot->GetGUID().GetRawValue());
+                if (g_DebugEnabled)
+                    LOG_INFO("server.loading", "[Ollama Chat] Bot {} selected ({})", partnerBot->GetName(),
+                             inviteRequest ? "asked for an invite" : "already talking with this player");
+            }
             for (Player* bot : candidateBots)
             {
+                if (partnerBot && (inviteRequest || !toTheRoom))
+                    break;   // one bot carries the conversation; a line to the room still lets the others join in
+                if (bot == partnerBot)
+                    continue;
                 if (g_DisableRepliesInCombat && bot->IsInCombat())
                 {
                     if(g_DebugEnabled)
@@ -880,9 +1049,10 @@ void PlayerBotChatHandler::ProcessChat(Player* player, uint32_t type, uint32_t l
         {
             std::string nameLc = bot->GetName();
             for (auto& c : nameLc) c = std::tolower(static_cast<unsigned char>(c));
-            if (!g_GatewayMentionExemptBotsSet.empty()
-                && g_GatewayMentionExemptBotsSet.count(nameLc)
-                && IsGatewayBot(bot->GetGUID().GetRawValue()))
+            if (addressedBots.count(bot->GetGUID().GetRawValue())
+                || (!g_GatewayMentionExemptBotsSet.empty()
+                    && g_GatewayMentionExemptBotsSet.count(nameLc)
+                    && IsGatewayBot(bot->GetGUID().GetRawValue())))
                 exemptBots.push_back(bot);
             else
                 otherBots.push_back(bot);
@@ -941,6 +1111,15 @@ void PlayerBotChatHandler::ProcessChat(Player* player, uint32_t type, uint32_t l
             continue;
         }
 
+        const bool aimedAtBot = addressedBots.count(botGuid) > 0;
+        if (aimedAtBot && !senderIsBot && sourceLocal != SRC_WHISPER_LOCAL)
+            OllamaChat::Ambient::RememberPartner(player, sourceLocal, channel, botGuid, true);
+
+        // --- Ambient chat: an unnamed public line from a whitelisted player (or a bot answering one) gets an in-character
+        //     answer from the mind service without promoting anyone. Named, whispered and grouped lines fall through.
+        if (OllamaChat::Ambient::Handle(bot, player, msg, sourceLocal, channel, senderIsBot, aimedAtBot))
+            continue;
+
         // --- Bot promotion (promotion.h): a playerbot outside Gateway.BotGUIDs
         //     gets the strategic lane while the operator talks to it. A line
         //     ADDRESSES the bot when it is a whisper or names the bot as a whole
@@ -950,7 +1129,7 @@ void PlayerBotChatHandler::ProcessChat(Player* player, uint32_t type, uint32_t l
         bool promotedBot = false;
         if (!configuredGatewayBot && g_GatewayEnable && OllamaChat::Promotion::IsSourceAllowed(sourceLocal))
         {
-            const bool addressed = (sourceLocal == SRC_WHISPER_LOCAL)
+            const bool addressed = (sourceLocal == SRC_WHISPER_LOCAL) || aimedAtBot
                                 || OllamaChat::Promotion::MentionsName(msg, bot->GetName());
             if (addressed && !senderIsBot && OllamaChat::Promotion::IsOperator(player))
                 promotedBot = OllamaChat::Promotion::TouchForChat(bot);
@@ -1014,7 +1193,7 @@ void PlayerBotChatHandler::ProcessChat(Player* player, uint32_t type, uint32_t l
             if (promotedBot && !isWhisper)
             {
                 requireMention = false;
-                promotedNotNamed = !OllamaChat::Promotion::MentionsName(msg, bot->GetName());
+                promotedNotNamed = !aimedAtBot && !OllamaChat::Promotion::MentionsName(msg, bot->GetName());
             }
 
             std::string strippedMessage = msg;
@@ -1065,7 +1244,10 @@ void PlayerBotChatHandler::ProcessChat(Player* player, uint32_t type, uint32_t l
                 ChatChannelSourceLocal capturedSource = sourceLocal;
                 uint32_t auditAccountId = playerAccountId;
 
-                std::thread([botGuid, senderGuid, strippedMessage, msg, capturedSource, auditAccountId]() {
+                // A question put in General, Trade, LFG or the realm channel is answered there, not by a whisper nobody else sees.
+                const std::string publicKind = capturedSource == SRC_GENERAL_LOCAL
+                    ? OllamaChat::Ambient::ChannelKind(capturedSource, channel) : std::string{};
+                std::thread([botGuid, senderGuid, strippedMessage, msg, capturedSource, auditAccountId, publicKind]() {
                     struct SlotGuard
                     {
                         ~SlotGuard() { ReleaseGatewaySlot(); }
@@ -1081,6 +1263,14 @@ void PlayerBotChatHandler::ProcessChat(Player* player, uint32_t type, uint32_t l
                             if (!botAI) return false;
                             Player* senderPtr = ObjectAccessor::FindPlayer(ObjectGuid(senderGuid));
                             if (!senderPtr) return false;
+
+                            if (!publicKind.empty())
+                            {
+                                nlohmann::json said = OllamaChat::WorldTask::Run([botGuid, publicKind, chunk]() -> nlohmann::json {
+                                    return nlohmann::json{{"ok", OllamaChat::Ambient::SayInChannel(botGuid, publicKind, chunk)}};
+                                }, 2000);
+                                return said.value("ok", false);
+                            }
 
                             switch (capturedSource)
                             {
@@ -1303,8 +1493,7 @@ static bool IsBotEligibleForChatChannelLocal(Player* bot, Player* player, ChatCh
         if (bot->GetTeamId() != player->GetTeamId())
         {
             // Allow cross-faction only for specific global channels
-            bool isGlobalChannel = (channel->GetName().find("World") != std::string::npos || 
-                                   channel->GetName().find("LookingForGroup") != std::string::npos);
+            bool isGlobalChannel = ChannelNameMatches(channel->GetName(), g_GlobalChannelNames);
             if (!isGlobalChannel)
             {
                 if(g_DebugEnabled)

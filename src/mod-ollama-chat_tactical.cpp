@@ -1160,7 +1160,9 @@ namespace
         if (!bot) return "";
         std::string s;
         s.reserve(768);
-        s += "bot_name=" + std::string(bot->GetName());
+        // The guid first: a gateway that keeps per-bot state (the SquidBots mind service) cannot tell bots apart by a
+        // name alone when the request carries no other identity, and Conquest of Azeroth names have two words.
+        s += "bot_guid=" + std::to_string(bot->GetGUID().GetCounter()) + " bot_name=" + std::string(bot->GetName());
         s += " class=" + std::to_string(bot->getClass());
         s += " race=" + std::to_string(bot->getRace());
         s += " level=" + std::to_string(static_cast<uint32_t>(bot->GetLevel()));
@@ -2582,7 +2584,7 @@ void PruneTacticalAuditRows()
 
     QueryResult tableExists = CharacterDatabase.Query(
         "SELECT TABLE_NAME FROM information_schema.tables "
-        "WHERE table_schema = 'acore_characters' AND table_name = 'mod_ollama_chat_tactical_audit'");
+        "WHERE table_schema = DATABASE() AND table_name = 'mod_ollama_chat_tactical_audit'");
     if (!tableExists) return;
 
     CharacterDatabase.Execute(

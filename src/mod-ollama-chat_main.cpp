@@ -4,6 +4,7 @@
 #include "mod-ollama-chat_command.h"
 #include "mod-ollama-chat_rag.h"
 #include "mod-ollama-chat_autoclaim.h"
+#include "mod-ollama-chat_ambient.h"
 #include "mod-ollama-chat_proactive.h"
 #include "Log.h"
 
@@ -25,5 +26,6 @@ void Addmod_ollama_chatScripts()
     new ChatOnGameObjectUse();
     new OllamaChatConfigCommand();
     new GatewayAutoClaimScript();
+    new CommunityScript();
     ollamachat::proactive::RegisterScripts();
 }

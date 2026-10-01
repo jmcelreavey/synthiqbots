@@ -495,6 +495,11 @@ Result Decide(const nlohmann::json& state, const nlohmann::json& questions,
     out.minConfidence = minConf;
     NoteSuccess(*gen);
 
+    // TypeSafe's native endpoint reports no cost (OpenRouter's does): estimate from the input tokens at the list price,
+    // so the log line and any total built from it are not a column of zeros.
+    if (out.costUsd <= 0.0 && g_JevInputPricePerMillion > 0.0f)
+        out.costUsd = static_cast<double>(out.inputTokens) * g_JevInputPricePerMillion / 1e6;
+
     // One line per call: enough to reconstruct the decision, never the state text.
     std::string summary;
     for (const auto& kv : out.answers)
@@ -526,6 +531,7 @@ void OnConfigReloaded()
     gen->sites[kSiteTickGate]   = SiteCfg{g_JevTickGateEnable,   g_JevTickGateMinConfidence};
     gen->sites[kSitePlanner]    = SiteCfg{g_JevPlannerEnable,    g_JevPlannerMinConfidence};
     gen->sites[kSiteTactical]   = SiteCfg{g_JevTacticalEnable,   g_JevTacticalMinConfidence};
+    gen->sites[kSiteDirector]   = SiteCfg{g_JevDirectorEnable,   g_JevDirectorMinConfidence};
     gen->sites[kSitePlaybook]   = SiteCfg{g_JevPlaybookEnable,   0.0f};
     gen->playbook        = ParsePlaybook(g_McpLeaderSystemPromptText);   // loaded earlier in LoadOllamaChatConfig
     gen->playbookBytes   = g_McpLeaderSystemPromptText.size();

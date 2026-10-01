@@ -3,8 +3,10 @@
 #include "mod-ollama-chat_overlord.h"
 #include "mod-ollama-chat_gateway.h"
 #include "mod-ollama-chat_tactical.h"
+#include "mod-ollama-chat_director.h"
 #include "mod-ollama-chat_fleet.h"
 #include "mod-ollama-chat_promotion.h"
+#include "mod-ollama-chat_ambient.h"
 #include "mod-ollama-chat_worldtask.h"
 #include "mod-ollama-chat_mcpserver.h"
 #include "mod-ollama-chat_opsapi.h"
@@ -15,6 +17,7 @@
 #include "PlayerbotMgr.h"
 #include "PlayerbotAI.h"
 #include "PlayerbotAIConfig.h"
+#include "ChatHelper.h"       // FormatClass: names Conquest of Azeroth classes from the client table
 #include "AiObjectContext.h"
 #include "LootObjectStack.h"
 #include "ObjectAccessor.h"
@@ -104,7 +107,13 @@ namespace
             case CLASS_MAGE:         return "Mage";
             case CLASS_WARLOCK:      return "Warlock";
             case CLASS_DRUID:        return "Druid";
-            default:                 return "Unknown";
+            default:
+                // Conquest of Azeroth's own classes (ids 12+): playerbots names them from the client's ChrClasses
+                // table (ChatHelper::FormatClass), so the model hears "Reaper" and not "Unknown".
+                {
+                    const std::string named = ChatHelper::FormatClass(classId);
+                    return named.empty() ? std::string("Unknown") : named;
+                }
         }
     }
 
@@ -1868,6 +1877,14 @@ static std::unordered_set<uint64_t> s_stayingBots;
         if (st.empty()) return nlohmann::json{{"error", "no tactical tick recorded for this bot since startup"}};
         st["botGuid"] = botGuid;
         return st;
+    }
+
+    // (2026-10-01) What the combat director was asked, what jev answered and what it changed, newest last.
+    nlohmann::json Tool_AdminDirectorState(uint64_t /*botGuid*/, uint64_t /*playerGuid*/, const nlohmann::json& args)
+    {
+        const int limit = std::max(1, std::min(50, args.value("limit", 20)));
+        return nlohmann::json{{"counters", OllamaChat::CombatDirector::Counters()},
+                              {"recent", OllamaChat::CombatDirector::RecentDecisions(static_cast<std::size_t>(limit))}};
     }
 
     nlohmann::json Tool_AdminTacticalForce(uint64_t botGuid, uint64_t /*playerGuid*/, const nlohmann::json& args)
@@ -15862,6 +15879,45 @@ static std::unordered_set<uint64_t> s_stayingBots;
         return nlohmann::json{{"ok", true}, {"channel", "yell"}, {"text", text}};
     }
 
+    // Speak in a public channel the bot is in: the zone channel, Trade, LFG, or the realm-wide channel
+    // ("Ascension" on Conquest of Azeroth). Playerbots already knows how to find those, including the
+    // realm's own channel numbering and names (AiPlayerbot.ZoneChannelId, BroadcastWorldChannelName), so this
+    // hands the line to it rather than looking channels up here.
+    nlohmann::json Tool_BotChannelSay(uint64_t botGuid, uint64_t /*playerGuid*/, const nlohmann::json& args)
+    {
+        if (!TryClaimActionRateSlot(botGuid, "bot_channel_say"))
+            return nlohmann::json{{"error", "rate-limited"}};
+        if (!g_McpAllowActionTools)
+            return nlohmann::json{{"error", "action tools disabled (set OllamaChat.Mcp.AllowActionTools = 1)"}};
+        if (botGuid == 0)
+            return nlohmann::json{{"error", "missing required argument 'botGuid' (numeric)"}};
+        std::string text = args.value("text", std::string{});
+        std::string err;
+        if (!ValidateChatText(text, err)) return nlohmann::json{{"error", err}};
+        std::string channel = args.value("channel", std::string{"zone"});
+        std::transform(channel.begin(), channel.end(), channel.begin(), [](unsigned char c) { return std::tolower(c); });
+        Player* bot = ObjectAccessor::FindPlayer(ObjectGuid(botGuid));
+        if (!bot || !bot->IsInWorld()) return nlohmann::json{{"error", "bot not in world"}};
+        PlayerbotAI* ai = PlayerbotsMgr::instance().GetPlayerbotAI(bot);
+        if (!ai) return nlohmann::json{{"error", "not a playerbot"}};
+
+        bool sent = false;
+        if (channel == "world" || channel == "realm")
+            sent = ai->SayToWorld(text);
+        else if (channel == "zone" || channel == "general")
+            sent = ai->SayToChannel(text, ChatChannelId::GENERAL);
+        else if (channel == "trade")
+            sent = ai->SayToChannel(text, ChatChannelId::TRADE);
+        else if (channel == "lfg")
+            sent = ai->SayToChannel(text, ChatChannelId::LOOKING_FOR_GROUP);
+        else
+            return nlohmann::json{{"error", "channel must be one of: zone, general, trade, lfg, world"}};
+        if (!sent)
+            return nlohmann::json{{"error", "the bot is not in a '" + channel + "' channel where it stands"}};
+        LOG_INFO("server.loading", "[Ollama Chat MCP] bot_channel_say: bot={} channel={} text='{}'", botGuid, channel, text);
+        return nlohmann::json{{"ok", true}, {"channel", channel}, {"text", text}};
+    }
+
     // ---- Mailbox -----------------------------------------------------------
     // bot_mail_read iterates Player::GetMails() directly (not via the playerbot
     // `mail ?` verb) so the agent gets structured JSON instead of formatted chat.
@@ -16066,6 +16122,73 @@ static std::unordered_set<uint64_t> s_stayingBots;
         };
     }
 
+    // bot_sell_by_mail: the bot sells what it advertised in the Trade channel (Ambient::Listing) to the player talking to it.
+    // The item goes out as cash-on-delivery mail: the buyer opens it at a mailbox and pays the price to take it, so nobody has
+    // to trust anybody and neither has to stand next to the other. Whole stack only, like bot_mail_send.
+    nlohmann::json Tool_BotSellByMail(uint64_t botGuid, uint64_t playerGuid, const nlohmann::json& args)
+    {
+        if (!TryClaimActionRateSlot(botGuid, "bot_sell_by_mail"))
+            return nlohmann::json{{"error", "rate-limited"}};
+        if (!g_McpAllowActionTools)
+            return nlohmann::json{{"error", "action tools disabled (set OllamaChat.Mcp.AllowActionTools = 1)"}};
+
+        OllamaChat::Ambient::Listing offer;
+        if (!OllamaChat::Ambient::GetListing(botGuid, offer))
+            return nlohmann::json{{"error", "you have nothing on offer: you did not advertise anything, or the offer has expired"}};
+
+        Player* bot = ObjectAccessor::FindPlayer(ObjectGuid(botGuid));
+        Player* buyer = playerGuid ? ObjectAccessor::FindPlayer(ObjectGuid(playerGuid)) : nullptr;
+        if (!bot || !bot->IsInWorld())
+            return nlohmann::json{{"error", "bot not in world"}};
+        if (!buyer || !buyer->IsInWorld() || buyer == bot)
+            return nlohmann::json{{"error", "the buyer is not online"}};
+
+        Item* itemToSend = nullptr;
+        auto findInPos = [&](uint8 bag, uint8 slot) -> Item* {
+            Item* it = bot->GetItemByPos(bag, slot);
+            return it && it->GetEntry() == offer.itemId && it->GetCount() == offer.count ? it : nullptr;
+        };
+        for (uint8 slot = INVENTORY_SLOT_ITEM_START; slot < INVENTORY_SLOT_ITEM_END && !itemToSend; ++slot)
+            itemToSend = findInPos(INVENTORY_SLOT_BAG_0, slot);
+        for (uint8 bag = INVENTORY_SLOT_BAG_START; bag < INVENTORY_SLOT_BAG_END && !itemToSend; ++bag)
+            if (Bag* pBag = bot->GetBagByPos(bag))
+                for (uint8 sl = 0; sl < pBag->GetBagSize() && !itemToSend; ++sl)
+                    itemToSend = findInPos(bag, sl);
+        if (!itemToSend || itemToSend->IsSoulBound())
+        {
+            OllamaChat::Ambient::ClearListing(botGuid);
+            return nlohmann::json{{"error", "you no longer have the item you advertised"}};
+        }
+
+        // Haggling may lower the price, but not below what a vendor pays, and never raises it above the advert.
+        ItemTemplate const* proto = itemToSend->GetTemplate();
+        const uint64_t floorPrice = std::min<uint64_t>(static_cast<uint64_t>(proto->SellPrice) * offer.count, offer.priceCopper);
+        uint32 price = args.value("price_copper", offer.priceCopper);
+        price = static_cast<uint32>(std::clamp<uint64_t>(price, floorPrice, offer.priceCopper));
+
+        CharacterDatabaseTransaction trans = CharacterDatabase.BeginTransaction();
+        MailDraft draft("For sale: " + proto->Name1, "Pay the cash on delivery to take it. Thanks for the custom!");
+        draft.AddCOD(price);
+        bot->MoveItemFromInventory(itemToSend->GetBagSlot(), itemToSend->GetSlot(), true);
+        itemToSend->DeleteFromInventoryDB(trans);
+        itemToSend->SetOwnerGUID(buyer->GetGUID());
+        itemToSend->SaveToDB(trans);
+        draft.AddItem(itemToSend);
+        draft.SendMailTo(trans, MailReceiver(buyer, buyer->GetGUID().GetCounter()), MailSender(bot));
+        CharacterDatabase.CommitTransaction(trans);
+        OllamaChat::Ambient::ClearListing(botGuid);
+
+        LOG_INFO("server.loading", "[Ollama Chat MCP] bot_sell_by_mail: bot={} buyer={} item={} x{} cod={}c",
+                 botGuid, buyer->GetName(), offer.itemId, offer.count, price);
+        return nlohmann::json{
+            {"ok", true},
+            {"item", offer.link},
+            {"cod_copper", price},
+            {"price", price == offer.priceCopper ? offer.priceText : std::to_string(price) + " copper"},
+            {"note", "mailed to the buyer cash on delivery: they pay when they open the mail at a mailbox"}
+        };
+    }
+
     // find_auctioneer — READ-ONLY nearest-auctioneer locator. Completes the
     // find-by-role NPC-locator family (trainer/vendor/flight_master/innkeeper/
     // stable_master/banker/spirit_healer/spirit_guide/battlemaster) with the one
@@ -16126,6 +16249,17 @@ static std::unordered_set<uint64_t> s_stayingBots;
             return nlohmann::json{{"error", "already_in_trade"}};
         if (bot->GetMapId() != player->GetMapId())
             return nlohmann::json{{"error", "different_map"}};
+        // Playerbots cancels a trade with any player who is neither the bot's master nor in its group ("I'm kind of
+        // busy now", TradeStatusAction), so the window would open and close in the same second. Say why instead.
+        {
+            Group* botGroup = bot->GetGroup();
+            if (!botGroup || !botGroup->IsMember(player->GetGUID()))
+                return nlohmann::json{{"error", "not_in_party"},
+                                      {"hint", "This bot only trades with members of its own group. Invite the player to the group first "
+                                               "(the invite tool), wait for them to accept, then trade. If they do not want to group, "
+                                               "offer to mail the item instead (bot_mail_send)."}};
+        }
+
         if (bot->GetDistance(player) > 11.11f)
             return nlohmann::json{{"error", "out_of_range"}, {"max_distance", 11.11}, {"actual_distance", bot->GetDistance(player)}};
         if (bot->GetTeamId() != player->GetTeamId())
@@ -19437,6 +19571,19 @@ static std::unordered_set<uint64_t> s_stayingBots;
                 {"required", nlohmann::json::array({"botGuid"})}
             },
             &Tool_AdminTacticalState,
+            AnnRead()
+        };
+
+        r["admin_director_state"] = {
+            "admin_director_state",
+            "(ADMIN) The combat director's recent consults: what it asked jev (focus / crowd control / mana posture), "
+            "what jev answered with its confidence, what was applied (focus target, crowd-control target, posture) and "
+            "the round-trip time. Read-only.",
+            {
+                {"type", "object"},
+                {"properties", {{"limit", {{"type", "integer"}, {"description", "How many of the latest consults (1-50, default 20)"}}}}}
+            },
+            &Tool_AdminDirectorState,
             AnnRead()
         };
 
@@ -23629,6 +23776,26 @@ static std::unordered_set<uint64_t> s_stayingBots;
             AnnAction(/*destructive=*/false)
         };
 
+        r["bot_channel_say"] = {
+            "bot_channel_say",
+            "Say something in a public chat channel the bot is in: 'zone' (or 'general') is the channel for the "
+            "zone it stands in, 'trade', 'lfg' (looking for group), or 'world' for the realm-wide channel every player "
+            "reads. Everyone in that channel sees it, so use it only when a player asked the bot to speak there or "
+            "the line is genuinely for the whole channel; a private answer is a whisper. Keep it to one short line.",
+            nlohmann::json{
+                {"type", "object"},
+                {"properties", {
+                    {"botGuid", BotGuidProp()},
+                    {"channel", {{"type", "string"}, {"enum", nlohmann::json::array({"zone", "general", "trade", "lfg", "world"})},
+                                 {"description", "Which channel. Default zone."}}},
+                    {"text",    {{"type", "string"}, {"description", "What to say. Max 255 chars; control chars and pipes rejected to prevent chat poisoning."}}}
+                }},
+                {"required", nlohmann::json::array({"botGuid", "text"})}
+            },
+            &Tool_BotChannelSay,
+            AnnAction(/*destructive=*/false)
+        };
+
         // ---- Mailbox ---
         r["bot_mail_read"] = {
             "bot_mail_read",
@@ -23648,6 +23815,24 @@ static std::unordered_set<uint64_t> s_stayingBots;
             },
             &Tool_BotMailRead,
             AnnRead()
+        };
+
+        r["bot_sell_by_mail"] = {
+            "bot_sell_by_mail",
+            "Sell the item you advertised in the Trade channel to the player talking to you, by cash-on-delivery mail: the "
+            "item is mailed to them and they pay your asking price when they open it. Call it once the player agrees to buy "
+            "(they answered your advert, asked for it, or said they will take it), then tell them in one short line to check "
+            "their mail. Optional price_copper lowers the price if you agreed to haggle; it never goes below the vendor price.",
+            {
+                {"type", "object"},
+                {"properties", {
+                    {"botGuid",      BotGuidProp()},
+                    {"price_copper", {{"type", "integer"}, {"description", "Lower asking price in copper if you agreed to haggle. Default: your advertised price."}}}
+                }},
+                {"required", nlohmann::json::array({"botGuid"})}
+            },
+            &Tool_BotSellByMail,
+            AnnAction(/*destructive=*/false)
         };
 
         r["bot_mail_send"] = {
@@ -23680,6 +23865,9 @@ static std::unordered_set<uint64_t> s_stayingBots;
 
         r["bot_trade_give"] = {
             "bot_trade_give",
+            "PREREQUISITES: the bot and the player must be in the same group (playerbots cancels a trade from "
+            "anyone else), within 11 yards, and item_id must be the real item template id from get_inventory or "
+            "the equipment listing (an equipped item must be unequipped first) — never guess it, and never send 0. "
             "Open a trade window with the recipient player and pre-load one item from the bot's "
             "inventory into trade slot 0. The recipient must click the in-game Accept button to "
             "finalize — the bot side is staged but does NOT auto-accept on its own. Complements "
@@ -24370,7 +24558,7 @@ std::string GetGatewayToolGroup(const std::string& n)
         n.rfind("tactical_", 0) == 0 ||
         ToolNameIn(n, {"emergency_stop", "instance_reset", "query_world_db_lookup", "get_fleet_status",
                        "admin_gm_command", "admin_group_join", "admin_player_gps", "admin_tactical_state",
-                       "admin_tactical_force", "admin_quest_state"}))
+                       "admin_tactical_force", "admin_quest_state", "admin_director_state"}))
         return "admin";
 
     if (ToolNameHas(n, "guild"))  return "guild";
@@ -24424,7 +24612,7 @@ std::string GetGatewayToolGroup(const std::string& n)
                        "bot_use_gameobject", "get_nearby_gameobjects"}))
         return "movement";
 
-    if (ToolNameIn(n, {"bot_say", "bot_yell", "bot_emote", "whisper_player", "talk_to_leader",
+    if (ToolNameIn(n, {"bot_say", "bot_yell", "bot_channel_say", "bot_emote", "whisper_player", "talk_to_leader",
                        "get_nearby_players", "get_player_state", "get_player_gear",
                        "find_nearby_quest_givers"}))
         return "social";
@@ -24830,4 +25018,37 @@ Creature* FindUsableClassTrainer(Player* bot, float range, uint32_t* affordable)
         return c;
     }
     return nullptr;
+}
+
+nlohmann::json DescribeBotBrief(Player* p)
+{
+    nlohmann::json brief = DescribePlayer(p);
+    if (!p)
+        return brief;
+    // Gender, errands and what the bot is up to: a roleplaying bot talks about its own life, and the mind service has no other
+    // way to know it. Titles are the quest's English name; at most four, so a full log does not fill the prompt.
+    brief["gender"] = p->getGender() == GENDER_FEMALE ? "female" : "male";
+    nlohmann::json quests = nlohmann::json::array();
+    for (uint8 slot = 0; slot < MAX_QUEST_LOG_SIZE && quests.size() < 4; ++slot)
+    {
+        const uint32 questId = p->GetQuestSlotQuestId(slot);
+        if (!questId)
+            continue;
+        if (Quest const* quest = sObjectMgr->GetQuestTemplate(questId))
+            quests.push_back(quest->GetTitle());
+    }
+    std::string doing = "walking the road";
+    if (p->IsInCombat())
+        doing = "in the middle of a fight";
+    else if (p->IsInFlight())
+        doing = "riding a flight path";
+    else if (p->IsMounted())
+        doing = "riding from one place to another";
+    else if (p->GetGroup() && p->GetGroup()->GetMembersCount() > 1)
+        doing = "travelling with companions";
+    else if (!quests.empty())
+        doing = "working through your errands";
+    brief["quests"] = quests;
+    brief["doing"] = doing;
+    return brief;
 }

@@ -28,6 +28,7 @@ Pick the doc that matches your task:
 | Autonomous bots | [docs/autonomous-bots.md](docs/autonomous-bots.md) |
 | Any playerbot you talk to / invite gets the strategic brain (bot promotion) | [docs/bot-promotion.md](docs/bot-promotion.md) |
 | jev decision tier (TypeSafe System One in front of the fast paths) | [docs/jev.md](docs/jev.md) |
+| Combat director (jev picks the focus target, crowd control and healer mana in a party fight) | [docs/director.md](docs/director.md) |
 | E2E harness: a headless human logs in and tests the fleet features | [docs/e2e.md](docs/e2e.md) |
 
 ## Build
