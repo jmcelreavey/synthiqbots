@@ -86,6 +86,30 @@ human is online, so the script waits up to 8 min for them after login. Rndbots i
 tester's invite, so the script falls back to `admin_group_join`. First pass 2026-09-25:
 a Tauren druid (level 42) named its real staff in 6.5 s.
 
+## Combat director (`director_run.py`)
+
+`python3 tools/e2e/director_run.py` (the options `minds_run.py` takes, plus `--bots`, `--mobs`, `--fight-wait`, `--fight-end-wait`) puts the test player
+in a party of 2-4 playerbots of its faction, spawns hostile mobs on them with GM chat commands and watches what the player is
+shown: the raid marks (`MSG_RAID_TARGET_UPDATE`, parsed into `raid_target` events), the party-chat announcement, and the marks
+coming down. The account must be a GM and the realm's remote console must be on; the run asks `ollama director status` first and
+SKIPs when the director is off.
+
+| | Proves |
+|---|---|
+| D1 | in a fight the director puts the skull on one of the mobs (seconds to the first mark is reported) |
+| D2 | a bot says the plan in party chat within 8 s of it |
+| D3 | when the fight is over the last thing that happened to the skull is a clear |
+| D4 | the player takes the skull off a second after it appears and the director leaves it off for `YieldSec`; proof it noticed is the `overrides` counter of `ollama director status` (a mark whose enemy died first is gone before the player clears it: SKIP, not a failure) and that it was still looking is `yield ticks` (a fight that ended first is a SKIP too) |
+| D5 | `.ollama director off` (the player's own switch): a fight puts up no mark and the director is not consulted; the switch is put back after |
+| D6 | the mana posture mechanism: `save mana` is taken off the bots, the director is made to `conserve` (`.ollama director force conserve`), a healer carries `save mana` and the engine agrees, and none is left on once the fight is over; SKIPs when the party has no healer (the director reports the party it sees) |
+
+The mobs are picked from the world database: one spellcaster among three melee mobs around the strongest bot's level (identical mobs are a coin
+flip, where the right answer is "leave it to the engine" and nothing is marked). A fight in which the director followed the enemies but jev was
+never sure is not a verdict on the director, so D1 and D4 get another fight (`--attempts`, default 2) before they are a SKIP. A FAIL means the director
+never saw a fight, a skull came back inside the yield, a mark was left up, or the player's off switch was ignored.
+
+Every scenario is a model's call about a real fight: run a FAIL twice before believing it. See [director.md](director.md).
+
 ## Protocol traps (each one hit or verified on 2026-09-25)
 
 - **OS tag `OSX`**, not `Win`: `WorldSession::InitWarden` only creates Warden

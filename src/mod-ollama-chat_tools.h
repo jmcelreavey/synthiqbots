@@ -116,6 +116,10 @@ bool IsToolVisibleToBot(const std::string& name, uint64_t botGuid);
 // `allowedTools` filters the registry; pass empty for "all enabled" (subject to global allowlist).
 // `botGuid` additionally drops out-of-scope tools (ops/leader) for this bot; pass 0 to skip
 // scope filtering entirely (used by callers that want the unfiltered array).
+// {name, level, class, race, zone, area} of a character, for prompts that want to say who is speaking.
+class Player;
+nlohmann::json DescribeBotBrief(Player* p);
+
 nlohmann::json BuildOpenAiToolsArray(const std::vector<std::string>& allowedTools, uint64_t botGuid = 0);
 
 // Dispatch a tool call by name. Returns the result JSON (or an object with "error":"...").

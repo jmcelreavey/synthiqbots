@@ -65,6 +65,7 @@ extern uint32_t    g_MaxConcurrentQueries;
 // --------------------------------------------
 extern bool        g_Enable;
 extern bool        g_DisableRepliesInCombat;
+extern bool        g_AnswerAddressedInCombat;   // a whispered or named bot answers even while DisableRepliesInCombat holds
 extern bool        g_DisableOllamaResponses;
 extern bool        g_EnableRandomChatter;
 extern bool        g_EnableEventChatter;
@@ -270,6 +271,11 @@ extern uint32_t g_EventCooldownTime;
 // Channel Disable Settings
 // --------------------------------------------
 extern bool g_DisableForCustomChannels;
+// Channel-name fragments (substring match) that decide how a chat channel is treated. Local channels only reach
+// bots in the player's own zone; global ones reach every zone and both factions. Conquest of Azeroth names its
+// channels differently from a stock client ("Zone - <place>", "Ascension"), so both lists are configurable.
+extern std::vector<std::string> g_LocalChannelNames;
+extern std::vector<std::string> g_GlobalChannelNames;
 extern bool g_DisableForSayYell;
 extern bool g_DisableForGuild;
 extern bool g_DisableForParty;
@@ -341,6 +347,7 @@ extern std::unordered_set<uint32_t> g_GatewayAutoClaimAccountIdsSet; // parsed
 
 // PR6: Tool use bridge
 extern bool        g_GatewayEnableToolUse;             // Send tools[] in request and dispatch tool_calls
+extern bool        g_GatewayInjectIdentity;            // Tell the gateway who is talking (guids + names) without the MCP server
 extern uint32_t    g_GatewayMaxToolIterations;         // Recursion guard for the tool-call loop
 extern std::string g_GatewayAllowedTools;              // raw csv config, e.g. "get_zone_info,whisper_player"
 extern std::vector<std::string> g_GatewayAllowedToolsList; // parsed
@@ -595,6 +602,7 @@ extern std::string g_JevProxy;                      // optional http proxy "host
 extern std::string g_JevProxyUser;
 extern std::string g_JevProxyPassword;
 extern uint32_t    g_JevTimeoutMs;                  // per-call cap before the chain's remaining budget clamps it
+extern float       g_JevInputPricePerMillion;       // USD per million input tokens, used when the provider reports no cost
 extern uint32_t    g_JevMaxConcurrent;              // client pool size (leased exclusively)
 extern uint32_t    g_JevBreakerCooldownSec;         // jev-side breaker open time after 3 failures
 extern std::string g_JevQuestionsFile;              // prompts/jev_questions.json
@@ -609,6 +617,8 @@ extern float       g_JevPlannerMinConfidence;
 extern bool        g_JevTacticalEnable;               // site B — per-tick action funnel (PR 2)
 extern float       g_JevTacticalMinConfidence;        // action Choice confidence to dispatch
 extern float       g_JevTacticalEscalateMin;          // escalate Noul P(yes) to enqueue an escalation
+extern bool        g_JevDirectorEnable;               // combat director picks (focus target, crowd control, posture)
+extern float       g_JevDirectorMinConfidence;        // a director answer under this confidence is not applied
 extern bool        g_JevPlaybookEnable;               // leader playbook relevance filter (PR 3)
 extern float       g_JevPlaybookMinRelevance;         // keep rows with P(relevant) >= this
 extern uint32_t    g_JevPlaybookMinRows;              // always keep at least this many (top-N)

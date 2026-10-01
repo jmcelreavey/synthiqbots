@@ -1,0 +1,44 @@
+diff --git a/src/Bot/PlayerbotAI.cpp b/src/Bot/PlayerbotAI.cpp
+index af9b6b0..40cadbe 100644
+--- a/src/Bot/PlayerbotAI.cpp
++++ b/src/Bot/PlayerbotAI.cpp
+@@ -5,6 +5,7 @@
+  */
+ 
+ #include "PlayerbotAI.h"
++#include <functional>
+ #include "CoaSpecialization.h"
+ #include "AiFactory.h"
+ #include "BudgetValues.h"
+@@ -3009,6 +3010,11 @@ std::vector<Player*> PlayerbotAI::GetAllPlayersInGroup()
+     return members;
+ }
+ 
++// An optional filter for the lines a bot sends to a public channel (the zone channel, Trade, LFG, the realm channel), set by
++// mod-ollama-chat when it is built in. Returning true means the line was taken: it is not sent now, and the filter says it
++// again in another form. Weak, so playerbots links and behaves exactly as before without that module.
++extern std::function<bool(Player*, int, std::string const&)> g_ollamaOutgoingChannelFilter __attribute__((weak));
++
+ // AzerothCore's own chat log hangs off the packet the client sends, and a bot never sends one:
+ // whatever the bots say would never be written anywhere. So write it here instead, in the shape
+ // that log uses, on the "playerbots.chat" logger. Nothing is written unless worldserver.conf
+@@ -3049,6 +3055,9 @@ bool PlayerbotAI::SayToWorld(std::string const& msg)
+         return false;
+     }
+ 
++    if (&g_ollamaOutgoingChannelFilter && g_ollamaOutgoingChannelFilter && g_ollamaOutgoingChannelFilter(bot, -1, msg))
++        return true;
++
+     ChannelMgr* cMgr = ChannelMgr::forTeam(bot->GetTeamId());
+     if (!cMgr)
+         return false;
+@@ -3073,6 +3082,9 @@ bool PlayerbotAI::SayToChannel(std::string const& msg, ChatChannelId const& chan
+     if (msg.empty())
+         return false;
+ 
++    if (&g_ollamaOutgoingChannelFilter && g_ollamaOutgoingChannelFilter && g_ollamaOutgoingChannelFilter(bot, static_cast<int>(chanId), msg))
++        return true;
++
+     ChannelMgr* cMgr = ChannelMgr::forTeam(bot->GetTeamId());
+     if (!cMgr)
+         return false;

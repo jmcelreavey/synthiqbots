@@ -23,7 +23,7 @@ void LoadPlayerPreferencesFromDB()
 
     QueryResult tableExists = CharacterDatabase.Query(
         "SELECT TABLE_NAME FROM information_schema.tables "
-        "WHERE table_schema = 'acore_characters' "
+        "WHERE table_schema = DATABASE() "
         "AND table_name IN ('mod_ollama_chat_optouts', 'mod_ollama_chat_bot_mutes')");
 
     if (!tableExists)

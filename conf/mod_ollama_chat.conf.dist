@@ -2,6 +2,7 @@
 
 ########################################
 # mod-ollama-chat configuration
+
 ########################################
 
 # --------------------------------------------
@@ -228,6 +229,27 @@ OllamaChat.YellDistance = 100.0
 #     Default:     0 (false)
 OllamaChat.DisableForCustomChannels = 0
 
+# OllamaChat.PromptDir
+#     Description: Folder holding the module's prompt files (gateway_leader.md, ollama_classifier.md, ...). Leave empty
+#                  to look in modules/mod-ollama-chat/prompts under the working directory, under the worldserver's
+#                  SourceDirectory, and in the Docker image's /azerothcore/modules. Set it when the module's source
+#                  is not on the machine that runs the worldserver (a prebuilt repack): copy the prompts/ folder there.
+#     Default:     ""
+OllamaChat.PromptDir = ""
+
+# OllamaChat.LocalChannelNames
+#     Description: Comma separated fragments of channel names that are zone-local: a bot answers there only when
+#                  it is in the same zone as the player. A channel matches when its name CONTAINS a fragment.
+#                  Conquest of Azeroth's per-zone channel is "Zone - <place>", so add "Zone -" on that realm.
+#     Default:     "General -,Trade -,LocalDefense -"
+OllamaChat.LocalChannelNames = "General -,Trade -,LocalDefense -"
+
+# OllamaChat.GlobalChannelNames
+#     Description: Comma separated fragments of channel names that are realm-wide: bots in any zone, of either
+#                  faction, may answer there. Conquest of Azeroth's realm channel is named "Ascension".
+#     Default:     "World,LookingForGroup"
+OllamaChat.GlobalChannelNames = "World,LookingForGroup"
+
 # OllamaChat.DisableForSayYell
 #     Description: When enabled (1), disables bot LLM routing and Tactical Ambient local speech in Say and Yell channels.
 #                  Useful if you want bots to be silent in proximity-based chats.
@@ -263,6 +285,14 @@ OllamaChat.EnableRandomChatter = 1
 #     Description: If true, bots will not reply or produce random chatter when in combat.
 #     Default:     1
 OllamaChat.DisableRepliesInCombat = 1
+
+# OllamaChat.AnswerAddressedInCombat
+#     Description: With DisableRepliesInCombat on, a bot that is IN COMBAT stays silent even when a player whispers it
+#                  or says its name. A bot that is out hunting is in combat most of the time, so it would hardly ever
+#                  answer. When 1, a bot that was spoken to directly (a whisper, or its name in a message) answers
+#                  regardless; unprompted chatter still waits until the fight is over.
+#     Default:     0 upstream; 1 on the SquidBots (Conquest of Azeroth) branch.
+OllamaChat.AnswerAddressedInCombat = 1
 
 # OllamaChat.MinRandomInterval
 #     Description: The minimum time (in seconds) between random lines from an AI bot.
@@ -1353,6 +1383,16 @@ OllamaChat.Gateway.BotOverridesJsonFile = ""
 #     Default:     0 (false)
 OllamaChat.Gateway.EnableToolUse = 0
 
+# OllamaChat.Gateway.InjectIdentity
+#     Description: Put the bot's and the player's guid and name at the top of every gateway request
+#                  ("ACTIVE WoW SESSION ... botGuid = N, name = X ... playerGuid = M, name = Y"), plus the tool
+#                  rules that go with it. This block is normally sent only while the embedded MCP server is
+#                  enabled (Mcp.Enable). A gateway that keeps its own memory of who said what (the SquidBots
+#                  mind service) needs the block but not an open MCP port, so this sends it on its own.
+#                  Still needs Mcp.InjectContextHint = 1 (the default).
+#     Default:     0 (false)
+OllamaChat.Gateway.InjectIdentity = 0
+
 # OllamaChat.Gateway.MaxToolIterations
 #     Description: Recursion guard for the tool-call loop. Each iteration can dispatch one
 #                  batch of tool_calls and re-query the gateway. The loop terminates either
@@ -1957,8 +1997,10 @@ OllamaChat.Fleet.EnsureIntervalSec = 20
 #                  before this feature landed. Enable=1 starts the tactical
 #                  heartbeat + strategic escalation worker; both still no-op
 #                  for a bot unless that bot's GUID is listed in BotGUIDs.
-#     Default:     1
-OllamaChat.Tactical.Enable = 1
+#     Default:     1 upstream; 0 on the SquidBots (Conquest of Azeroth) branch, where the dashboard's
+#                  "Minds on" recipe switches it on together with the address of the model that serves it.
+#                  Off means a realm without AI behaves exactly like one without this module.
+OllamaChat.Tactical.Enable = 0
 
 # OllamaChat.Tactical.BotGUIDs
 #     Description: Comma-separated list of bot character GUIDs (low parts) that
@@ -2038,6 +2080,12 @@ OllamaChat.Tactical.SnapshotCacheMs = 500
 #                  tactical endpoint URL. Queue overflow waits for a slot.
 #                  Per-bot overrides can set maxConcurrentQueries for their
 #                  endpoint. 0 = unlimited.
+#                  1 is right for one local GPU. For a hosted endpoint or the
+#                  SquidBots mind service use about as many as Tactical.NearbyBotMax:
+#                  the whole tick shares the Tactical.RequestTimeoutMs budget, and
+#                  with 1 the last of five bots is still queued when it runs out
+#                  (measured on the test realm: a third of the model-tier ticks
+#                  failed `inference_failed` with 1, 1 in 58 with 4).
 #     Default:     1
 OllamaChat.Tactical.MaxConcurrentQueries = 1
 
@@ -2769,6 +2817,12 @@ OllamaChat.Jev.ProxyPassword = ""
 #     Default:     1500
 OllamaChat.Jev.TimeoutMs = 1500
 
+# OllamaChat.Jev.InputPricePerMillionUsd
+#     Description: What a million input tokens cost, for the cost figure in the log line. Used only when the provider
+#                  reports no cost itself (TypeSafe's native endpoint does not; OpenRouter's does). Output is free.
+#     Default:     0.042 (TypeSafe's list price)
+OllamaChat.Jev.InputPricePerMillionUsd = 0.042
+
 # OllamaChat.Jev.MaxConcurrent
 #     Description: Persistent HTTP client pool size (keep-alive; leased one call
 #                  at a time). A saturated pool is a fast fall-through (200 ms).
@@ -2859,3 +2913,360 @@ OllamaChat.Jev.Playbook.MinRelevance = 0.3
 OllamaChat.Jev.Playbook.MinRows = 4
 OllamaChat.Jev.Playbook.MaxRows = 12
 OllamaChat.Jev.Playbook.TimeoutMs = 4000
+
+# OllamaChat.Jev.Director.Enable / .MinConfidence
+#     Description: The combat director's picks (see OllamaChat.Director.* below and docs/director.md): which
+#                  enemy to kill first, which to crowd-control, whether healers ration mana. One ~0.4 s jev
+#                  request per consult, every answer re-checked in code before it touches the game. A pick
+#                  under MinConfidence is dropped, which leaves the engine's own choice in place.
+#     Default:     0 / 0.6
+OllamaChat.Jev.Director.Enable = 0
+OllamaChat.Jev.Director.MinConfidence = 0.6
+
+###################################################################################################
+# COMBAT DIRECTOR (SquidBots): jev picks the targets, the playerbots engine still does the fighting
+###################################################################################################
+#
+#    While a whitelisted player's party (the player plus bots, five at most) is in a fight, the director looks at the
+#    party and the enemies every IntervalMs and asks jev three things: which enemy the party should kill first (a
+#    skull mark, which playerbots' dps target returns first), which enemy to crowd-control (a moon mark: bots leave
+#    it alone and mages, rogues, hunters, warlocks and druids cast on it) and, when a healer is low on mana,
+#    whether the healers should ration it (playerbots' `save mana` strategy). It never casts, moves or targets a bot
+#    itself, and it does not touch raids, battlegrounds or fights against players.
+#    It stays out of the way: a mark the player puts up is theirs for YieldSec, a fresh focus is kept for
+#    FocusHoldSec, a target under a third of its health is finished first, and one-mob pulls are left to the engine.
+#    Needs OllamaChat.Jev.Director.Enable = 1 (and the rest of the Jev.* connection settings) as well.
+#    Everything below is read live: config_reload applies it without a restart.
+
+# OllamaChat.Director.Enable
+#     Default:     0
+OllamaChat.Director.Enable = 0
+
+# OllamaChat.Director.IntervalMs
+#     Description: Minimum time between two consults of the same fight.
+#     Default:     2500
+OllamaChat.Director.IntervalMs = 2500
+
+# OllamaChat.Director.MaxCallsPerFight / .MaxCallsPerHour
+#     Description: Hard caps on jev requests, per fight and across the realm per rolling hour.
+#     Default:     30 / 900
+OllamaChat.Director.MaxCallsPerFight = 30
+OllamaChat.Director.MaxCallsPerHour = 900
+
+# OllamaChat.Director.TimeoutMs
+#     Description: How long one jev request may take before the consult is given up (the engine keeps
+#                  fighting as it was).
+#     Default:     1500
+OllamaChat.Director.TimeoutMs = 1500
+
+# OllamaChat.Director.MinEnemies
+#     Description: A fight with fewer enemies than this is left to the engine, unless one of them is an elite,
+#                  a rare or a boss, or somebody in the party is below half health.
+#     Default:     2
+OllamaChat.Director.MinEnemies = 2
+
+# OllamaChat.Director.FocusHoldSec / .YieldSec
+#     Description: FocusHoldSec: a fresh focus target is not swapped for another for this long.
+#                  YieldSec: after a player places, moves or clears a raid mark themselves, the director leaves
+#                  that mark alone for this long.
+#     Default:     6 / 20
+OllamaChat.Director.FocusHoldSec = 6
+OllamaChat.Director.YieldSec = 20
+
+# OllamaChat.Director.CrowdControl
+#     Description: 0 never crowd-controls anything; focus and mana posture still work.
+#     Default:     1
+OllamaChat.Director.CrowdControl = 1
+
+# OllamaChat.Director.Announce
+#     Description: 1 has a bot say the plan in party chat ("Kill the Defias Conjurer first."), at most once every 8 s.
+#     Default:     1
+OllamaChat.Director.Announce = 1
+
+# OllamaChat.Director.CalloutTimeoutSeconds
+#     Description: How long the mind service may take to give a bot its own-voice line for the announcement before the
+#                  director says its plain line instead (the line comes from the service's bank, so it is normally instant).
+#     Default:     3
+OllamaChat.Director.CalloutTimeoutSeconds = 3
+
+###################################################################################################
+# AMBIENT CHAT (SquidBots): bots answer a hello nearby, and each other
+###################################################################################################
+#
+#    A whitelisted player (Gateway.WhitelistAccountIds) says something in /say, /yell or a public channel without naming a
+#    bot, and the bots in earshot answer in their own personalities, one short line each, staggered like people typing. A
+#    bot's answer can be answered by another bot a couple of times, so a street talks back and among itself and then goes
+#    quiet. The words come from the mind service (POST /ambient on the Gateway.Url host); with the service stopped the bots
+#    say nothing. Lines a player NAMES a bot in, whispers, or sends to their party go the ordinary way instead.
+#    Who is in earshot is decided by the settings above: SayDistance, YellDistance, the channel a bot is in,
+#    PlayerReplyChance.*, and MaxBotsToPick (a random number from 1 to that many bots answer one line).
+
+# OllamaChat.Ambient.Enable
+#     Default:     1
+OllamaChat.Ambient.Enable = 1
+
+# OllamaChat.Ambient.Channels
+#     Description: Where bots answer an unnamed hello. say, yell, zone (General / Zone -), trade, lfg, world (the realm channel),
+#                  guild. In roleplay mode (see OllamaChat.Roleplay.* below) the mind service's own list narrows this further.
+#     Default:     "say,yell,zone,trade,lfg,world,guild"
+OllamaChat.Ambient.Channels = "say,yell,zone,trade,lfg,world,guild"
+
+# OllamaChat.Ambient.JitterMinMs / JitterMaxMs
+#     Description: The pause (milliseconds) before the first bot answers a line, chosen at random between the two.
+#     Default:     600 / 1800
+OllamaChat.Ambient.JitterMinMs = 600
+OllamaChat.Ambient.JitterMaxMs = 1800
+
+# OllamaChat.Ambient.TypingBaseMs / TypingMsPerChar / TypingMaxMs
+#     Description: How long a bot "types" before its line appears: base + per character, capped. Time spent getting the
+#                  words counts towards it, so a quick banked line is not held up twice.
+#     Default:     500 / 40 / 4500
+OllamaChat.Ambient.TypingBaseMs = 500
+OllamaChat.Ambient.TypingMsPerChar = 40
+OllamaChat.Ambient.TypingMaxMs = 4500
+
+# OllamaChat.Ambient.StarterIntervalSec
+#     Description: How often (seconds) a zone with a whitelisted player in it is considered for a bot to say something
+#                  unprompted (a line from the mind service's line bank; no model call). 0 turns it off. Without it a realm
+#                  is silent until somebody types.
+#     Default:     40
+OllamaChat.Ambient.StarterIntervalSec = 40
+
+# OllamaChat.Ambient.StarterPercent
+#     Description: Percent chance that a considered zone gets a remark (the other times it stays quiet a while longer).
+#     Default:     100
+OllamaChat.Ambient.StarterPercent = 100
+
+# OllamaChat.Ambient.StarterMinGapSec
+#     Description: The fewest seconds between two unprompted remarks in one zone, and none while a conversation is going on.
+#     Default:     45
+OllamaChat.Ambient.StarterMinGapSec = 45
+
+# OllamaChat.Ambient.ChainChance
+#     Description: Percent chance that a bot in earshot answers a line another bot said as part of a conversation.
+#     Default:     60
+OllamaChat.Ambient.ChainChance = 60
+
+# OllamaChat.Ambient.ChainMaxDepth
+#     Description: How many bot-to-bot replies deep a conversation goes (0 = bots only answer you).
+#     Default:     2
+OllamaChat.Ambient.ChainMaxDepth = 2
+
+# OllamaChat.Ambient.MaxLinesPerScene
+#     Description: Most lines the bots say after one line of yours, in one place.
+#     Default:     8
+OllamaChat.Ambient.MaxLinesPerScene = 8
+
+# OllamaChat.Ambient.SceneWindowSec
+#     Description: How long after your line the bots there may keep talking among themselves.
+#     Default:     90
+OllamaChat.Ambient.SceneWindowSec = 90
+
+# OllamaChat.Ambient.BotCooldownSec
+#     Description: A bot speaks at most once in this many seconds.
+#     Default:     20
+OllamaChat.Ambient.BotCooldownSec = 20
+
+# OllamaChat.Ambient.StaggerMs
+#     Description: Gap between the answers of the bots that heard the same line (plus a little chance), before typing time.
+#     Default:     1600
+OllamaChat.Ambient.StaggerMs = 1600
+
+# OllamaChat.Ambient.LineGapMs
+#     Description: Least time between two lines said in the same place (a zone, the realm channels, one guild), so a room reads
+#                  as people taking turns and not as several bots answering in the same second. Stock-line rewrites are exempt.
+#     Default:     2000
+OllamaChat.Ambient.LineGapMs = 2000
+
+# OllamaChat.Ambient.MaxLineChars
+#     Description: A safety net: an answer longer than this is cut at a word. The mind service already shortens a line to a whole
+#                  sentence within 160 characters, so keep this above that, or it cuts lines off in the middle of a sentence.
+#     Default:     200
+OllamaChat.Ambient.MaxLineChars = 200
+
+# OllamaChat.Ambient.TimeoutSeconds
+#     Default:     15
+OllamaChat.Ambient.TimeoutSeconds = 15
+
+# OllamaChat.Ambient.Url
+#     Description: Empty = the Gateway.Url host with the path /ambient.
+#     Default:     ""
+OllamaChat.Ambient.Url = ""
+
+# OllamaChat.Ambient.RewriteStockLines
+#     Description: Playerbots' bots say ready-made lines in the public channels ("Took [quest]. Time to dive in and get it
+#                  done.", "WTS Cloth", "Someone tell Ashenvale that I am here"). With this on, a bot with a whitelisted player
+#                  within RewriteRangeYards holds the stock line back and says the same thing in its own words, in its own
+#                  personality, a moment later (item and quest links are kept). If the mind service does not answer, the stock
+#                  line goes out a little late. With nobody near, nothing changes: the bots stay exactly as playerbots made them.
+#     Default:     1
+OllamaChat.Ambient.RewriteStockLines = 1
+
+# OllamaChat.Ambient.RewriteRangeYards
+#     Default:     250
+OllamaChat.Ambient.RewriteRangeYards = 250
+
+# OllamaChat.Ambient.RewriteScenePercent
+#     Description: Percent chance that a rewritten remark starts a small conversation among the bots around it.
+#     Default:     20
+OllamaChat.Ambient.RewriteScenePercent = 20
+
+# OllamaChat.Ambient.PartnerWindowSec
+#     Description: After a bot answers a whitelisted player in a channel, that bot answers the player's next lines there too, named
+#                  or not, for this many seconds after each exchange. 0 turns it off.
+#     Default:     120
+OllamaChat.Ambient.PartnerWindowSec = 120
+
+# OllamaChat.Ambient.ListingMinutes
+#     Description: How long an item a bot advertised in the Trade channel stays on offer (a buyer who answers within this time can
+#                  have it, cash on delivery, through the bot_sell_by_mail tool).
+#     Default:     30
+OllamaChat.Ambient.ListingMinutes = 30
+
+# OllamaChat.Community.Enable
+#     Description: The realm's regulars. The mind service keeps a small cast of bots (OllamaChat.Community cast size is set on the
+#                  Minds page) with character sheets and friendships. They start most of the talk, friends answer each other by
+#                  name, and a whitelisted player is greeted by the ones who know them when they log in.
+#     Default:     1
+OllamaChat.Community.Enable = 1
+
+# OllamaChat.Community.JoinHomeGuild
+#     Description: The first time a whitelisted player with no guild comes online, put them into the guild that has most of the
+#                  regulars of their faction, so they have a guild chat with familiar faces in it. Remembered per character, so
+#                  leaving the guild sticks.
+#     Default:     0
+OllamaChat.Community.JoinHomeGuild = 0
+
+# OllamaChat.Community.CastStarterPercent
+#     Description: Percent of conversation starters that come from the regulars when one of them is free to talk.
+#     Default:     75
+OllamaChat.Community.CastStarterPercent = 75
+
+# OllamaChat.Community.GuildChatWeight
+#     Description: How often, against the realm, zone, LFG and Trade channels (45, 35, 10, 10), a bot starts talking in the guild
+#                  chat of a whitelisted player who is in a guild.
+#     Default:     40
+OllamaChat.Community.GuildChatWeight = 40
+
+# OllamaChat.Community.WelcomeDelaySec / WelcomeCount
+#     Description: How long after a whitelisted player logs in the regulars greet them, and how many of them do.
+#     Default:     12 / 2
+OllamaChat.Community.WelcomeDelaySec = 12
+OllamaChat.Community.WelcomeCount = 2
+
+# OllamaChat.Community.SyncMinutes
+#     Description: How often the module tells the mind service who is online so the cast can be kept up to date.
+#     Default:     10
+OllamaChat.Community.SyncMinutes = 10
+
+###################################################################################################
+# ROLEPLAY (SquidBots): bots are characters in the lore, not players at a keyboard
+###################################################################################################
+#
+#    In roleplay mode (the default) every bot is a person of its race and calling, with a backstory that grows as it levels,
+#    who knows the zone it stands in and what it is doing there, and talks in character. It does not chat in the realm channel
+#    (Ascension), General, Trade or Looking For Group; playerbots' stock lines for those channels are not said at all. Whispers,
+#    party chat and what a player says to a bot nearby are answered as before, in character. The mind service owns the switch
+#    (Minds page > Chat style: Roleplay / Fake players) and the module follows it within a few seconds; see docs/roleplay.md.
+
+# OllamaChat.Roleplay.Mode
+#     Description: "auto" follows the mind service's dashboard switch. "roleplay" or "players" forces one without asking it.
+#                  Until the service has answered, and whenever it cannot be reached, roleplay is assumed.
+#     Default:     "auto"
+OllamaChat.Roleplay.Mode = "auto"
+
+# OllamaChat.Roleplay.Channels
+#     Description: Where roleplaying bots speak up by themselves, used when Mode is "roleplay" or the service has not answered
+#                  yet. say, yell, zone, trade, lfg, world, guild. Narrowed by OllamaChat.Ambient.Channels.
+#     Default:     "say,yell,guild"
+OllamaChat.Roleplay.Channels = "say,yell,guild"
+
+# OllamaChat.Roleplay.DropStockLines
+#     Description: 1 = playerbots' stock chatter (loot brags, LFG and Trade adverts, ...) in a channel a character would not
+#                  speak in is not said at all. 0 = it goes out as playerbots wrote it.
+#     Default:     1
+OllamaChat.Roleplay.DropStockLines = 1
+
+# OllamaChat.Roleplay.SayWeight / SayRangeYards / YellRangeYards
+#     Description: How often a character near a whitelisted player says something in /say, compared with the other channels
+#                  (zone 35, guild 40, ...), and how near (yards) a bot must be to speak in /say or /yell.
+#     Default:     70 / 30 / 90
+OllamaChat.Roleplay.SayWeight = 70
+OllamaChat.Roleplay.SayRangeYards = 30
+OllamaChat.Roleplay.YellRangeYards = 90
+
+# OllamaChat.Roleplay.PollSeconds
+#     Description: How often the module asks the mind service how the bots should talk.
+#     Default:     10
+OllamaChat.Roleplay.PollSeconds = 10
+
+# OllamaChat.Roleplay.TypingBaseMs / TypingMsPerChar / TypingMaxMs / JitterMinMs / JitterMaxMs
+#     Description: The pauses of a character who speaks (a person talks faster than they type): before it answers, and for a line of a given
+#                  length. Used instead of the Ambient.* figures while roleplay is on.
+#     Default:     300 / 22 / 3000 / 250 / 900
+OllamaChat.Roleplay.TypingBaseMs = 300
+OllamaChat.Roleplay.TypingMsPerChar = 22
+OllamaChat.Roleplay.TypingMaxMs = 3000
+OllamaChat.Roleplay.JitterMinMs = 250
+OllamaChat.Roleplay.JitterMaxMs = 900
+
+# OllamaChat.Roleplay.AckEmote
+#     Description: 1 = a bot spoken to by name makes a thinking gesture while its answer is fetched.
+#     Default:     1
+OllamaChat.Roleplay.AckEmote = 1
+
+# OllamaChat.Roleplay.EmoteReplies / EmoteNearbyPercent / EmoteSpeakPercent
+#     Description: A whitelisted player's /bow, /wave, /thank, /laugh and the like are answered by the bot they aim it at (or, with
+#                  EmoteNearbyPercent chance, the nearest one) with an emote back and, EmoteSpeakPercent of the time, a line from the bank.
+#     Default:     1 / 50 / 60
+OllamaChat.Roleplay.EmoteReplies = 1
+OllamaChat.Roleplay.EmoteNearbyPercent = 50
+OllamaChat.Roleplay.EmoteSpeakPercent = 60
+
+# OllamaChat.Roleplay.ProximityGreet / ProximityGreetYards / ProximityGreetMinutes
+#     Description: A bot that knows a whitelisted player says hello when they walk up to it, and does not greet the same player again for
+#                  ProximityGreetMinutes. The mind service decides who is a stranger (it stays silent, mostly).
+#     Default:     1 / 9 / 20
+OllamaChat.Roleplay.ProximityGreet = 1
+OllamaChat.Roleplay.ProximityGreetYards = 9
+OllamaChat.Roleplay.ProximityGreetMinutes = 20
+
+# OllamaChat.Roleplay.CompanionRemarks / CompanionIdleMinutes / CompanionGapSec / CompanionBotGapSec
+#     Description: A bot in a party with a whitelisted player remarks on a moment of the road (a new zone, a great foe down, a fall, a
+#                  find), and every CompanionIdleMinutes on a quiet road (0 = never). One remark per party every CompanionGapSec, one per bot
+#                  every CompanionBotGapSec.
+#     Default:     1 / 6 / 75 / 150
+OllamaChat.Roleplay.CompanionRemarks = 1
+OllamaChat.Roleplay.CompanionIdleMinutes = 6
+OllamaChat.Roleplay.CompanionGapSec = 75
+OllamaChat.Roleplay.CompanionBotGapSec = 150
+
+# OllamaChat.Roleplay.NpcReplies / NpcRangeYards / NpcGapSec
+#     Description: An innkeeper, guard, trainer, vendor or flight master near a whitelisted player answers in character when the player
+#                  speaks to them in /say: with them selected, or by name or title. One answer per character every NpcGapSec.
+#     Default:     1 / 10 / 5
+OllamaChat.Roleplay.NpcReplies = 1
+OllamaChat.Roleplay.NpcRangeYards = 10
+OllamaChat.Roleplay.NpcGapSec = 5
+
+# OllamaChat.Roleplay.ChainChance / ChainMaxDepth / MaxLinesPerScene / BotCooldownSec / StaggerMs / LineGapMs / StarterMinGapSec / GuildChatWeight
+#     Description: How lively a conversation among characters is. Roleplay reads these in place of the Ambient.* figures (a crowd of fake
+#                  players can pile on and chain a line five deep; people in a guild take turns): the chance a bot's line is answered, how
+#                  many answers deep it goes, lines per scene, a bot's quiet time after speaking, the pause per extra answerer, the least
+#                  gap between two lines in a place, the least gap between two unprompted remarks, and how often a player's guild is the
+#                  place a character starts one. A line is answered by one bot, and a line spoken to somebody by name by that somebody only.
+#     Default:     55 / 2 / 5 / 45 / 3500 / 4500 / 110 / 25
+OllamaChat.Roleplay.ChainChance = 55
+OllamaChat.Roleplay.ChainMaxDepth = 2
+OllamaChat.Roleplay.MaxLinesPerScene = 5
+OllamaChat.Roleplay.BotCooldownSec = 45
+OllamaChat.Roleplay.StaggerMs = 3500
+OllamaChat.Roleplay.LineGapMs = 4500
+OllamaChat.Roleplay.StarterMinGapSec = 110
+OllamaChat.Roleplay.GuildChatWeight = 25
+
+# OllamaChat.Gateway.SoleCompanionNeedsNoName
+#     Description: In a party of one whitelisted player and one bot, whatever the player says in party chat is said to that bot, named or
+#                  not ("Whats your cape?"). With more bots in the party a line still has to name the one it is for.
+#     Default:     1
+OllamaChat.Gateway.SoleCompanionNeedsNoName = 1

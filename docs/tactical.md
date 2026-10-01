@@ -88,7 +88,8 @@ design:
   ticks, zero Ollama calls, zero tokens.
 - Runtime auto-enroll can tick nearby playerbots without hand-maintaining every
   GUID: `Tactical.AutoEnrollNearbyBots=1`, `Tactical.NearbyBotMax=5`.
-- Combat tactics stay with the playerbots engine. Dispatcher rejects combat-
+- Combat tactics stay with the playerbots engine (who the party focuses, crowd-controls and whether healers ration mana is the separate
+  opt-in [combat director](director.md), which places raid marks and switches the healers' `save mana` strategy, and never casts for a bot). Dispatcher rejects combat-
   tactic actions during `IsInCombat()` unless `AllowCombatOverride=1`.
 - Routine unchanged snapshots should use `tactical_idle`. Emotes/speech are
   reserved for nearby context, recent gameplay events, or material state

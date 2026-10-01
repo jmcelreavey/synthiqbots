@@ -704,5 +704,41 @@
       "true": "The message is one of the triggers, a paraphrase of one, a specific case of that workflow, or a request the workflow is needed to fulfil (e.g. 'where's Clawd' needs the locate/roster workflow).",
       "false": "A different order, a different tool family, small talk, or a question about something this workflow does not touch. Sharing a word with a trigger is not relevance."
     }
+  },
+  "director": {
+    "_note": "Combat director (src/mod-ollama-chat_director.cpp). Options are built in C++ each consult: `focus` = the labelled enemies (E1..E6, most worth killing first) + keep; `cc` = the enemies that may be crowd-controlled + none, only asked with 3+ enemies and a bot that can do it; `posture` = push|conserve, only asked when a healer is low on mana. Everything the model picks is re-checked in code before it touches the game, so this file only supplies wording.",
+    "focus": {
+      "instructions": {
+        "question": "Which enemy should this party kill first? The bots' engine handles the fighting; you pick the target, or `keep`.",
+        "read": "`party` lists each member with role, hp % and power %; `attacking` is the enemy (label) a member is hitting. `enemies` are labelled E1.. in rough order; each has level, rank, hp %, the spell being cast and who it is attacking, and `priority`, the rules' own score. `marked` shows the enemy that already carries the party's focus.",
+        "policy": [
+          "Priority: 1) an enemy attacking a healer, a caster or any member below 40% hp; 2) a caster, especially with an interruptible cast; 3) an enemy that is nearly dead; 4) anything else. Bosses and elites are not priority by rank alone.",
+          "`priority` on each enemy is a score from simple rules (higher = more worth killing first). Use it to break ties, not to override a clear reason above.",
+          "If no enemy stands out, or the current focus is fine, answer keep."
+        ]
+      }
+    },
+    "cc": {
+      "instructions": {
+        "question": "Should one enemy (not the focus) be crowd-controlled by the party's casters? Pick it, or `none`.",
+        "policy": [
+          "Pick an enemy that is dangerous and not being handled: a caster attacking a healer or a hurt member, or a hard hitter that has not been picked up.",
+          "`none` when the enemies are all alike, weak, or nearly dead, or when the party is clearly winning. Never pick an enemy that is nearly dead."
+        ]
+      }
+    },
+    "posture": {
+      "instructions": {
+        "question": "A healer is low on mana. `conserve` makes healers ration mana for the rest of the fight; `push` heals normally.",
+        "policy": [
+          "conserve when several enemies, elites or a long fight remain and the party is not in danger right now.",
+          "push when the fight is nearly won, or when people are in danger and healing cannot wait."
+        ]
+      },
+      "criteria": {
+        "push": "Mana is fine for what is left, or the fight is nearly over: heal and fight normally.",
+        "conserve": "Several enemies remain or the fight is long and a healer is low: healers heal only when needed so the group is still standing at the end."
+      }
+    }
   }
 }

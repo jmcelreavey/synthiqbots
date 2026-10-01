@@ -60,8 +60,17 @@ namespace OllamaChat::Promotion
     // the whole realm.
     bool IsOperator(Player* p);
 
-    // Whole-word, case-insensitive: "Raz" matches "raz, heal" but not "crazy".
+    // Whole-word, case-insensitive: "Raz" matches "raz, heal" but not "crazy". A bot named "Flutki Bot" is also
+    // mentioned by "Flutki": that is what people type, and the " Bot" suffix is only how the account names them.
     bool MentionsName(const std::string& message, const std::string& name);
+
+    // The shorthand a player used to address someone in `message` ("Hey Ed", "Ed, how are you", "thanks ed", "how are you, ed?"),
+    // lowercased, or "" when the line holds none. Only read in a place where one talks TO somebody, and never for words like
+    // "all" or "guys", so ordinary words are not mistaken for a name. The caller matches it against the bots' names.
+    std::string NicknameToken(const std::string& message);
+
+    // The name without a trailing " Bot" ("Flutki Bot" -> "Flutki"); the name itself when there is no such suffix.
+    std::string ShortName(const std::string& name);
 
     // Chat source allowed to promote / reach a promoted bot (Gateway.Promote.Channels).
     bool IsSourceAllowed(int chatChannelSourceLocal);

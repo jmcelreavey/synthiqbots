@@ -11,6 +11,9 @@ public:
     Acore::ChatCommands::ChatCommandTable GetCommands() const override;
 
     static bool HandleOllamaReloadCommand(ChatHandler* handler);
+    // The Ascension client still polls ".localspecstate" on cores that removed it (jealous-sound #5507 moved the
+    // talent state to native packets). Unknown, the server answers every poll with a red "does not exist" line.
+    static bool HandleLegacyClientPollCommand(ChatHandler* handler);
     static bool HandleOllamaSentimentViewCommand(ChatHandler* handler, Optional<std::string> botName, Optional<std::string> playerName);
     static bool HandleOllamaSentimentSetCommand(ChatHandler* handler, std::string botName, std::string playerName, float sentimentValue);
     static bool HandleOllamaSentimentResetCommand(ChatHandler* handler, Optional<std::string> botName, Optional<std::string> playerName);
@@ -22,6 +25,11 @@ public:
     static bool HandleOllamaGatewayCostsCommand(ChatHandler* handler, Optional<uint32> hours);
     static bool HandleOllamaGatewayPruneCommand(ChatHandler* handler);
     static bool HandleOllamaTacticalStatusCommand(ChatHandler* handler, Optional<uint64> botGuid);
+    static bool HandleOllamaDirectorStatusCommand(ChatHandler* handler);
+    static bool HandleOllamaDirectorOffCommand(ChatHandler* handler);
+    static bool HandleOllamaDirectorOnCommand(ChatHandler* handler);
+    static bool HandleOllamaDirectorForceConserveCommand(ChatHandler* handler);
+    static bool HandleOllamaDirectorForceCcCommand(ChatHandler* handler);
 
     // Player-facing controls (SEC_PLAYER)
     static bool HandleOllamaOptOutCommand(ChatHandler* handler);

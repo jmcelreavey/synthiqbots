@@ -7,6 +7,71 @@ Format inspired by [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [Unreleased] — SquidBots `coa` branch — runs on Conquest of Azeroth with a memory-keeping gateway
+
+See [coa.md](coa.md) for the whole picture. Everything here is off or inert until configured.
+
+### Added
+
+- **Roleplay mode.** With the SquidBots mind service the bots can be characters in the lore instead of fake players (the default;
+  switched on the service's Minds page, followed by the module within seconds). The module tells the service each bot's race, class,
+  gender, level, zone, what it is doing and its open errands (`DescribeBotBrief`, a `roleplay_context=` line in the `[BOT STATE SNAPSHOT]`,
+  every ambient request, the director's callouts), keeps the bots out of the realm channel, General, Trade and LFG (and drops playerbots'
+  stock chatter there), and lets a character near a whitelisted player speak in `/say`. New keys: `OllamaChat.Roleplay.Mode`, `.Channels`,
+  `.DropStockLines`, `.SayWeight`, `.SayRangeYards`, `.YellRangeYards`, `.PollSeconds`. `OllamaChat.Ambient.Channels` now lists `guild`. With
+  roleplay off (`chat_mode = players`) nothing changes. See [roleplay.md](roleplay.md). Also in roleplay: a journal of what each bot does is sent with its context (`DescribeBotBrief`: events, errands with their aims, time of day, holidays); companions remark in party chat; a bot greets a player it knows on walking up and answers emotes; an innkeeper, guard or trainer answers `/say` in character; a character does not answer the other faction; quicker speech pauses and a thinking gesture (`OllamaChat.Roleplay.*`); a bot is called by the first name of a two-word name (`Promotion::ShortName`).
+- **Combat director.** While a whitelisted player's party is in a fight, jev picks which enemy to kill first (skull
+  mark), which to crowd-control (moon mark) and whether healers should ration mana (`save mana`), and the playerbots
+  engine does the rest. Stays out of the way of the player's own marks, never flips a focus inside
+  `FocusHoldSec`, finishes a nearly-dead target, and cleans up its marks when the fight ends. Off by default:
+  `OllamaChat.Director.Enable` and `OllamaChat.Jev.Director.Enable`. New MCP tool `admin_director_state`. A bot says
+  the plan in party chat in its own voice (mind-service line bank, `mode: "combat"`), with a plain line when the service
+  has nothing. The question wording was tuned on an offline bench (`tests/director/bench_director.py`). Players switch it off for
+  their own character with `.ollama director off` (`on` undoes it) and `.ollama optout` covers it too; `.ollama director status` (GM or
+  console) shows the switches, counters and the last consults. Live check: `tools/e2e/director_run.py`; offline: `tests/run_harnesses.sh`.
+  See [director.md](director.md).
+- **Combat director hardening.** A fight ends only after 4 s with no enemy attacking, and a player's yield over a mark survives a fight boundary; a moon
+  mark on an enemy that is attacking (crowd control that never landed or broke) is released, because the engine's target choosers skip a moon-marked
+  unit outright; the mana posture is asked only when it could change something (CoA healers already carry `save mana`) and is read back from the
+  engine after every change; priests are no longer counted as crowd-controllers (Shackle Undead only); the speaker of a callout is a random bot, not
+  always the tank. New counters and a party report in `.ollama director status`, and two admin test hooks (`.ollama director force conserve|cc`).
+  `tools/e2e/director_run.py` D6 covers the mana posture.
+- **`OllamaChat.Jev.InputPricePerMillionUsd`.** TypeSafe's native endpoint reports no cost, so every Jev log line said `cost=$0.000000`; the
+  cost is now estimated from the input tokens at this list price (default 0.042) when the provider reports none.
+- **`bot_channel_say` tool.** An awake bot can speak in the zone channel, Trade, LFG or the realm-wide channel
+  (`world`), using playerbots' own `SayToChannel` / `SayToWorld`, so CoA's channel numbering and the
+  `AiPlayerbot.BroadcastWorldChannelName` setting apply. Needs `Mcp.AllowActionTools`; rate limited like `bot_say`;
+  requires a human's confirmation when the tactical loop proposes it.
+- **`OllamaChat.LocalChannelNames` / `OllamaChat.GlobalChannelNames`.** Which channels are zone-local and which are
+  realm-wide, by name fragment. Defaults keep the old behaviour; CoA wants `Zone -` local and `Ascension` global.
+- **`OllamaChat.Gateway.InjectIdentity`.** Sends the bot/player identity block without enabling the MCP server, so a
+  gateway that keeps its own memory can tell players apart.
+- **`tools/e2e/minds_run.py`.** A clientless player that whispers a real bot and checks the AI path end to end.
+- **`OllamaChat.AnswerAddressedInCombat`.** A bot that is whispered, or called by name, answers even while it is in combat.
+  With `DisableRepliesInCombat` on (the default) a bot that grinds, which is in combat most of the time, dropped every
+  whisper without a word. Unprompted chatter still waits for the fight to end. Default 1 in `conf.dist`.
+- **`bot_guid=` is the first key of the tactical snapshot**, and the classifier prompt maps "say ... in world/zone/trade/lfg
+  chat" to `bot_channel_say` (which is now in the classifier allowlist).
+- **`OllamaChat.PromptDir`, and prompt files found under the worldserver's `SourceDirectory`.** The prompt files were
+  looked for relative to the working directory or at the Docker image's path, so a native or repack install logged
+  "could not be opened" for all three and ran without them.
+
+### Changed
+
+- A global gateway needs only `Gateway.Url`. It used to be disabled at startup ("no global URL/Token") when the token
+  was empty, which is the normal case for a gateway on the same machine.
+- Promotion works with only `Gateway.Url` set (a single global gateway), not only with a fleet "template bot".
+- `Tactical.Enable` now defaults to 0 in `conf.dist`.
+- Class names for classes the stock list does not know (CoA's 12+) come from `ChatHelper::FormatClass`.
+
+### Fixed
+
+- Six `information_schema` queries named `acore_characters`; they now use `DATABASE()`, so realms with other schema names
+  keep their personality, audit and opt-out tables.
+- `mod-ollama-chat_httpclient.h` did not compile with clang (missing `<cstdint>`).
+
+---
+
 ## [Unreleased] — 2026-09-25 (VLAT) — grouped MCP calls reach the bot they name
 
 ### Fixed

@@ -1,4 +1,6 @@
 #include "mod-ollama-chat_config.h"
+#include "mod-ollama-chat_ambient.h"
+#include "mod-ollama-chat_director.h"
 #include "mod-ollama-chat_sentiment.h"
 #include "mod-ollama-chat_rag.h"
 #include "mod-ollama-chat_gateway.h"
@@ -37,7 +39,7 @@ constexpr char kDefaultTacticalRequireConfirmationFor[] =
     "bot_accept_quest,bot_abandon_quest,bot_choose_quest_reward,"
     "bot_equip_item,bot_unequip_item,bot_use_item,bot_destroy_item,"
     "bot_set_home,bot_bank_deposit,bot_bank_withdraw,"
-    "bot_guild_bank_deposit,bot_guild_bank_withdraw,bot_mail_send,bot_yell";
+    "bot_guild_bank_deposit,bot_guild_bank_withdraw,bot_mail_send,bot_yell,bot_channel_say";
 }
 
 
@@ -94,6 +96,7 @@ uint32_t    g_MaxConcurrentQueries = 0;
 // --------------------------------------------
 bool        g_Enable                          = true;
 bool        g_DisableRepliesInCombat          = true;
+bool        g_AnswerAddressedInCombat         = false;
 bool        g_DisableOllamaResponses          = false;
 bool        g_EnableRandomChatter             = true;
 bool        g_EnableEventChatter              = true;
@@ -300,6 +303,8 @@ uint32_t g_EventCooldownTime = 10;
 // Channel Disable Settings
 // --------------------------------------------
 bool g_DisableForCustomChannels = false;
+std::vector<std::string> g_LocalChannelNames  = {"General -", "Trade -", "LocalDefense -"};
+std::vector<std::string> g_GlobalChannelNames = {"World", "LookingForGroup"};
 bool g_DisableForSayYell = false;
 bool g_DisableForGuild = false;
 bool g_DisableForParty = false;
@@ -355,6 +360,7 @@ std::string g_GatewayAutoClaimAccountIds       = "";
 std::unordered_set<uint32_t> g_GatewayAutoClaimAccountIdsSet;
 
 bool        g_GatewayEnableToolUse             = false;
+bool        g_GatewayInjectIdentity            = false;
 uint32_t    g_GatewayMaxToolIterations         = 3;
 std::string g_GatewayAllowedTools              = "";
 std::vector<std::string> g_GatewayAllowedToolsList;
@@ -493,6 +499,7 @@ std::string g_JevProxy                  = "";
 std::string g_JevProxyUser              = "";
 std::string g_JevProxyPassword          = "";
 uint32_t    g_JevTimeoutMs              = 1500;
+float       g_JevInputPricePerMillion   = 0.042f;
 uint32_t    g_JevMaxConcurrent          = 2;
 uint32_t    g_JevBreakerCooldownSec     = 60;
 std::string g_JevQuestionsFile          = "modules/mod-ollama-chat/prompts/jev_questions.json";
@@ -507,6 +514,8 @@ float       g_JevPlannerMinConfidence   = 0.6f;
 bool        g_JevTacticalEnable          = false;
 float       g_JevTacticalMinConfidence  = 0.6f;
 float       g_JevTacticalEscalateMin    = 0.8f;
+bool        g_JevDirectorEnable          = false;
+float       g_JevDirectorMinConfidence  = 0.6f;
 bool        g_JevPlaybookEnable          = false;
 float       g_JevPlaybookMinRelevance    = 0.3f;
 uint32_t    g_JevPlaybookMinRows         = 4;
@@ -561,6 +570,24 @@ static void AddUniquePath(std::vector<std::string>& paths, const std::string& pa
 static std::vector<std::string> BuildPromptPathCandidates(const std::string& path)
 {
     std::vector<std::string> paths;
+
+    // Where the prompt files are depends on the install: /azerothcore/modules/... in the Docker image, and on a
+    // native or repack install wherever the module was put. OllamaChat.PromptDir names that folder outright, and the
+    // worldserver's own SourceDirectory (a core checkout with modules/mod-ollama-chat inside) is tried too.
+    auto joined = [](const std::string& folder, const std::string& tail)
+    {
+        return folder + ((folder.back() == '/' || folder.back() == '\\') ? "" : "/") + tail;
+    };
+    const std::string promptDir = sConfigMgr->GetOption<std::string>("OllamaChat.PromptDir", "");
+    if (!promptDir.empty())
+    {
+        const size_t slash = path.find_last_of("/\\");
+        AddUniquePath(paths, joined(promptDir, slash == std::string::npos ? path : path.substr(slash + 1)));
+    }
+    const std::string sourceDir = sConfigMgr->GetOption<std::string>("SourceDirectory", "");
+    if (!sourceDir.empty() && StartsWith(path, kModulePromptPrefix))
+        AddUniquePath(paths, joined(sourceDir, path));
+
     AddUniquePath(paths, path);
 
     if (StartsWith(path, kLegacyModulePromptPrefix))
@@ -849,7 +876,7 @@ TacticalBotConfig ResolveTacticalBotConfig(uint64_t botGuid)
 void LoadBotPersonalityList()
 {    
     // Let's make sure our user has sourced the required sql file to add the new table
-    QueryResult tableExists = CharacterDatabase.Query("SELECT * FROM information_schema.tables WHERE table_schema = 'acore_characters' AND table_name = 'mod_ollama_chat_personality' LIMIT 1");
+    QueryResult tableExists = CharacterDatabase.Query("SELECT * FROM information_schema.tables WHERE table_schema = DATABASE() AND table_name = 'mod_ollama_chat_personality' LIMIT 1");
     if (!tableExists)
     {
         LOG_ERROR("server.loading", "[Ollama Chat] Please source the required database table first");
@@ -950,6 +977,7 @@ void LoadOllamaChatConfig()
 
     g_Enable                          = sConfigMgr->GetOption<bool>("OllamaChat.Enable", true);
     g_DisableRepliesInCombat          = sConfigMgr->GetOption<bool>("OllamaChat.DisableRepliesInCombat", true);
+    g_AnswerAddressedInCombat         = sConfigMgr->GetOption<bool>("OllamaChat.AnswerAddressedInCombat", false);
     g_DisableOllamaResponses          = sConfigMgr->GetOption<bool>("OllamaChat.DisableOllamaResponses", false);
     g_EnableRandomChatter             = sConfigMgr->GetOption<bool>("OllamaChat.EnableRandomChatter", true);
     g_EnableEventChatter              = sConfigMgr->GetOption<bool>("OllamaChat.EnableEventChatter", true);
@@ -1113,6 +1141,7 @@ void LoadOllamaChatConfig()
     }
 
     g_GatewayEnableToolUse             = sConfigMgr->GetOption<bool>("OllamaChat.Gateway.EnableToolUse", false);
+    g_GatewayInjectIdentity            = sConfigMgr->GetOption<bool>("OllamaChat.Gateway.InjectIdentity", false);
     g_GatewayMaxToolIterations         = sConfigMgr->GetOption<uint32_t>("OllamaChat.Gateway.MaxToolIterations", 3);
     g_GatewayAllowedTools              = sConfigMgr->GetOption<std::string>("OllamaChat.Gateway.AllowedTools", "");
     g_GatewayAllowedToolsList          = SplitString(g_GatewayAllowedTools, ',');
@@ -1429,6 +1458,7 @@ void LoadOllamaChatConfig()
     g_JevProxyUser               = sConfigMgr->GetOption<std::string>("OllamaChat.Jev.ProxyUser", "");
     g_JevProxyPassword           = sConfigMgr->GetOption<std::string>("OllamaChat.Jev.ProxyPassword", "");   // ggignore: empty default, the live value lives only in the host bind-mount conf
     g_JevTimeoutMs               = sConfigMgr->GetOption<uint32_t>("OllamaChat.Jev.TimeoutMs", 1500);
+    g_JevInputPricePerMillion    = sConfigMgr->GetOption<float>("OllamaChat.Jev.InputPricePerMillionUsd", 0.042f);
     g_JevMaxConcurrent           = sConfigMgr->GetOption<uint32_t>("OllamaChat.Jev.MaxConcurrent", 2);
     g_JevBreakerCooldownSec      = sConfigMgr->GetOption<uint32_t>("OllamaChat.Jev.BreakerCooldownSec", 60);
     g_JevQuestionsFile           = sConfigMgr->GetOption<std::string>("OllamaChat.Jev.QuestionsFile", "modules/mod-ollama-chat/prompts/jev_questions.json");
@@ -1443,6 +1473,8 @@ void LoadOllamaChatConfig()
     g_JevTacticalEnable          = sConfigMgr->GetOption<bool>("OllamaChat.Jev.Tactical.Enable", false);
     g_JevTacticalMinConfidence   = sConfigMgr->GetOption<float>("OllamaChat.Jev.Tactical.MinConfidence", 0.6f);
     g_JevTacticalEscalateMin     = sConfigMgr->GetOption<float>("OllamaChat.Jev.Tactical.EscalateMin", 0.8f);
+    g_JevDirectorEnable          = sConfigMgr->GetOption<bool>("OllamaChat.Jev.Director.Enable", false);
+    g_JevDirectorMinConfidence   = sConfigMgr->GetOption<float>("OllamaChat.Jev.Director.MinConfidence", 0.6f);
     g_JevPlaybookEnable          = sConfigMgr->GetOption<bool>("OllamaChat.Jev.Playbook.Enable", false);
     g_JevPlaybookMinRelevance    = sConfigMgr->GetOption<float>("OllamaChat.Jev.Playbook.MinRelevance", 0.3f);
     g_JevPlaybookMinRows         = sConfigMgr->GetOption<uint32_t>("OllamaChat.Jev.Playbook.MinRows", 4);
@@ -1545,7 +1577,8 @@ void LoadOllamaChatConfig()
     if (g_GatewayEnable)
     {
         // Global URL/token can be empty if all bots have per-bot overrides
-        bool hasGlobalConfig = !g_GatewayUrl.empty() && !g_GatewayBearerToken.empty();
+        // The token is optional: a gateway on this machine (a local model, the SquidBots mind service) needs none.
+        bool hasGlobalConfig = !g_GatewayUrl.empty();
         bool hasPerBotConfigs = !g_GatewayBotConfigs.empty();
 
         if (!hasGlobalConfig && !hasPerBotConfigs)
@@ -1693,6 +1726,25 @@ void LoadOllamaChatConfig()
 
     // Channel disable settings
     g_DisableForCustomChannels = sConfigMgr->GetOption<bool>("OllamaChat.DisableForCustomChannels", false);
+    {
+        // Comma separated fragments; spaces around a fragment are ignored ("General -" keeps its inner space).
+        auto parseNames = [](const std::string& csv, std::vector<std::string>& out)
+        {
+            out.clear();
+            for (std::string token : SplitString(csv, ','))
+            {
+                const size_t first = token.find_first_not_of(" \t");
+                if (first == std::string::npos)
+                    continue;
+                token = token.substr(first, token.find_last_not_of(" \t") - first + 1);
+                out.push_back(token);
+            }
+        };
+        parseNames(sConfigMgr->GetOption<std::string>("OllamaChat.LocalChannelNames", "General -,Trade -,LocalDefense -"),
+                   g_LocalChannelNames);
+        parseNames(sConfigMgr->GetOption<std::string>("OllamaChat.GlobalChannelNames", "World,LookingForGroup"),
+                   g_GlobalChannelNames);
+    }
     g_DisableForSayYell = sConfigMgr->GetOption<bool>("OllamaChat.DisableForSayYell", false);
     g_DisableForGuild = sConfigMgr->GetOption<bool>("OllamaChat.DisableForGuild", false);
     g_DisableForParty = sConfigMgr->GetOption<bool>("OllamaChat.DisableForParty", false);
@@ -1875,6 +1927,13 @@ void OllamaChatConfigWorldScript::OnUpdate(uint32 diff)
     // Bot promotion: party guests re-derived from live groups, chat windows
     // expired. World thread, interval-gated inside Tick.
     OllamaChat::Promotion::Tick(diff);
+
+    // Bots that start a remark on their own in a zone with a whitelisted player in it (interval-gated inside Tick).
+    OllamaChat::Ambient::Tick(diff);
+
+    // Fights a whitelisted player's party is in: focus target, crowd control and healer mana posture from jev
+    // (interval-gated inside Tick, no-op unless OllamaChat.Director.Enable=1).
+    OllamaChat::CombatDirector::Tick(diff);
 
     // World-thread tasks posted by MCP tools / the gateway worker (worldtask.h).
     OllamaChat::WorldTask::Drain();

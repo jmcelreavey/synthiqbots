@@ -73,7 +73,11 @@ Other common mappings:
 - stop looting <item> -> bot_remove_loot_item
 - invite <name> -> bot_invite_to_group
 - set home/bind hearth here -> bot_set_home
-- say <text> -> bot_say
+- say <text> in world/realm/Ascension chat -> bot_channel_say with args {"botGuid":{{botGuid}},"channel":"world","text":"<text>"}
+- say <text> in zone/general chat -> bot_channel_say with args {"botGuid":{{botGuid}},"channel":"zone","text":"<text>"}
+- say <text> in trade chat -> bot_channel_say with args {"botGuid":{{botGuid}},"channel":"trade","text":"<text>"}
+- say <text> in lfg/looking for group chat -> bot_channel_say with args {"botGuid":{{botGuid}},"channel":"lfg","text":"<text>"}
+- say <text> -> bot_say (only when no channel is named; "text" is just the words to say, without quotes)
 - yell <text> -> bot_yell
 
 Final override:
