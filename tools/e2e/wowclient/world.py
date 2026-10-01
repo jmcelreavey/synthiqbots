@@ -34,6 +34,9 @@ SMSG_CHAR_CREATE = 0x03A
 CMSG_PLAYER_LOGIN = 0x03D
 SMSG_LOGIN_VERIFY_WORLD = 0x236
 CMSG_MESSAGECHAT = 0x095
+SMSG_EMOTE = 0x103
+CMSG_TEXT_EMOTE = 0x104
+SMSG_TEXT_EMOTE = 0x105
 SMSG_MESSAGECHAT = 0x096
 SMSG_GM_MESSAGECHAT = 0x3B3
 CMSG_NAME_QUERY = 0x050
@@ -383,6 +386,12 @@ class WorldClient:
             self._event("logout_complete")
         elif opcode == SMSG_WARDEN_DATA:
             self._event("warden", size=len(body))
+        elif opcode == SMSG_EMOTE and len(body) >= 12:
+            emote, guid = struct.unpack("<IQ", body[:12])
+            self._event("emote", emote=emote, guid=guid)
+        elif opcode == SMSG_TEXT_EMOTE and len(body) >= 16:
+            guid, text_emote, number = struct.unpack("<QII", body[:16])
+            self._event("text_emote", guid=guid, text_emote=text_emote)
         elif opcode == MSG_RAID_TARGET_UPDATE:
             # type 0: one slot changed (setter guid, slot, target guid; target 0 = cleared); type 1: the whole list.
             b = _Buf(body)
@@ -527,6 +536,10 @@ class WorldClient:
 
     def say(self, text: str) -> None:
         self.send(CMSG_MESSAGECHAT, struct.pack("<II", CHAT_SAY, LANG_ORCISH) + text.encode() + b"\0")
+
+    def text_emote(self, text_emote: int, target: int = 0) -> None:
+        """/bow, /wave, /thank ... (TEXT_EMOTE_* ids) aimed at `target` (a guid) or at nobody."""
+        self.send(CMSG_TEXT_EMOTE, struct.pack("<IIQ", text_emote, 0, target))
 
     def invite(self, name: str) -> None:
         self.send(CMSG_GROUP_INVITE, name.encode() + b"\0" + struct.pack("<I", 0))

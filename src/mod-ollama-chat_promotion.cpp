@@ -344,7 +344,11 @@ namespace OllamaChat::Promotion
             return name;
         std::string tail = name.substr(name.size() - suffix.size());
         std::transform(tail.begin(), tail.end(), tail.begin(), [](unsigned char c) { return std::tolower(c); });
-        return tail == suffix ? name.substr(0, name.size() - suffix.size()) : name;
+        if (tail == suffix)
+            return name.substr(0, name.size() - suffix.size());
+        // A character with a surname of its own ("Elorin Moonwhisper") is called by its first name, which is what people type.
+        const size_t space = name.find(' ');
+        return space != std::string::npos && space >= 3 ? name.substr(0, space) : name;
     }
 
     bool MentionsName(const std::string& message, const std::string& name)

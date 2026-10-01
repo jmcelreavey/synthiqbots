@@ -19,7 +19,7 @@ See [coa.md](coa.md) for the whole picture. Everything here is off or inert unti
   every ambient request, the director's callouts), keeps the bots out of the realm channel, General, Trade and LFG (and drops playerbots'
   stock chatter there), and lets a character near a whitelisted player speak in `/say`. New keys: `OllamaChat.Roleplay.Mode`, `.Channels`,
   `.DropStockLines`, `.SayWeight`, `.SayRangeYards`, `.YellRangeYards`, `.PollSeconds`. `OllamaChat.Ambient.Channels` now lists `guild`. With
-  roleplay off (`chat_mode = players`) nothing changes. See [roleplay.md](roleplay.md).
+  roleplay off (`chat_mode = players`) nothing changes. See [roleplay.md](roleplay.md). Also in roleplay: a journal of what each bot does is sent with its context (`DescribeBotBrief`: events, errands with their aims, time of day, holidays); companions remark in party chat; a bot greets a player it knows on walking up and answers emotes; an innkeeper, guard or trainer answers `/say` in character; a character does not answer the other faction; quicker speech pauses and a thinking gesture (`OllamaChat.Roleplay.*`); a bot is called by the first name of a two-word name (`Promotion::ShortName`).
 - **Combat director.** While a whitelisted player's party is in a fight, jev picks which enemy to kill first (skull
   mark), which to crowd-control (moon mark) and whether healers should ration mana (`save mana`), and the playerbots
   engine does the rest. Stays out of the way of the player's own marks, never flips a focus inside

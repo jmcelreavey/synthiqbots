@@ -3199,3 +3199,52 @@ OllamaChat.Roleplay.YellRangeYards = 90
 #     Description: How often the module asks the mind service how the bots should talk.
 #     Default:     10
 OllamaChat.Roleplay.PollSeconds = 10
+
+# OllamaChat.Roleplay.TypingBaseMs / TypingMsPerChar / TypingMaxMs / JitterMinMs / JitterMaxMs
+#     Description: The pauses of a character who speaks (a person talks faster than they type): before it answers, and for a line of a given
+#                  length. Used instead of the Ambient.* figures while roleplay is on.
+#     Default:     300 / 22 / 3000 / 250 / 900
+OllamaChat.Roleplay.TypingBaseMs = 300
+OllamaChat.Roleplay.TypingMsPerChar = 22
+OllamaChat.Roleplay.TypingMaxMs = 3000
+OllamaChat.Roleplay.JitterMinMs = 250
+OllamaChat.Roleplay.JitterMaxMs = 900
+
+# OllamaChat.Roleplay.AckEmote
+#     Description: 1 = a bot spoken to by name makes a thinking gesture while its answer is fetched.
+#     Default:     1
+OllamaChat.Roleplay.AckEmote = 1
+
+# OllamaChat.Roleplay.EmoteReplies / EmoteNearbyPercent / EmoteSpeakPercent
+#     Description: A whitelisted player's /bow, /wave, /thank, /laugh and the like are answered by the bot they aim it at (or, with
+#                  EmoteNearbyPercent chance, the nearest one) with an emote back and, EmoteSpeakPercent of the time, a line from the bank.
+#     Default:     1 / 50 / 60
+OllamaChat.Roleplay.EmoteReplies = 1
+OllamaChat.Roleplay.EmoteNearbyPercent = 50
+OllamaChat.Roleplay.EmoteSpeakPercent = 60
+
+# OllamaChat.Roleplay.ProximityGreet / ProximityGreetYards / ProximityGreetMinutes
+#     Description: A bot that knows a whitelisted player says hello when they walk up to it, and does not greet the same player again for
+#                  ProximityGreetMinutes. The mind service decides who is a stranger (it stays silent, mostly).
+#     Default:     1 / 9 / 20
+OllamaChat.Roleplay.ProximityGreet = 1
+OllamaChat.Roleplay.ProximityGreetYards = 9
+OllamaChat.Roleplay.ProximityGreetMinutes = 20
+
+# OllamaChat.Roleplay.CompanionRemarks / CompanionIdleMinutes / CompanionGapSec / CompanionBotGapSec
+#     Description: A bot in a party with a whitelisted player remarks on a moment of the road (a new zone, a great foe down, a fall, a
+#                  find), and every CompanionIdleMinutes on a quiet road (0 = never). One remark per party every CompanionGapSec, one per bot
+#                  every CompanionBotGapSec.
+#     Default:     1 / 6 / 75 / 150
+OllamaChat.Roleplay.CompanionRemarks = 1
+OllamaChat.Roleplay.CompanionIdleMinutes = 6
+OllamaChat.Roleplay.CompanionGapSec = 75
+OllamaChat.Roleplay.CompanionBotGapSec = 150
+
+# OllamaChat.Roleplay.NpcReplies / NpcRangeYards / NpcGapSec
+#     Description: An innkeeper, guard, trainer, vendor or flight master near a whitelisted player answers in character when the player
+#                  speaks to them in /say: with them selected, or by name or title. One answer per character every NpcGapSec.
+#     Default:     1 / 10 / 5
+OllamaChat.Roleplay.NpcReplies = 1
+OllamaChat.Roleplay.NpcRangeYards = 10
+OllamaChat.Roleplay.NpcGapSec = 5

@@ -13,6 +13,12 @@ service recorded:
   R5  channels stay silent: in the watch window no bot says anything in the realm channel, General, Trade or Looking For Group
   R6  characters speak aloud: a bot near the player says something in /say within the watch window (SKIP when none did; the bank must be written
       and the starter interval is a minute or two), and it is in the world too
+  R7  a bot's journal reaches the mind service: after a GM level-up the mind holds the event and shows it to the model as something that happened
+      "lately"
+  R8  a bow aimed at a bot is answered with an emote (and often a line)
+  R9  a real innkeeper answers in character when addressed in /say (SKIP when this realm has no Horde innkeeper spawn to stand beside)
+  R10 a bot that knows the player greets them when they walk up to it (the run makes them acquaintances in the mind's database first)
+  R11 a bot in the player's party remarks on a moment (a GM level-up) in party chat
 
 The test account must be a GM (the run revives itself and goes to the crowd) and on the module's whitelist. The mind service must answer
 POST /cast {"op": "mode"} with chat_mode roleplay. One JSON line per scenario, then a summary; exit 0 when nothing failed. A model's answer is
@@ -33,7 +39,9 @@ import urllib.request
 
 import minds_run
 
-CHAT_SAY, CHAT_CHANNEL = 0x01, 0x11
+CHAT_SAY, CHAT_PARTY, CHAT_MONSTER_SAY, CHAT_CHANNEL = 0x01, 0x02, 0x0C, 0x11
+TEXT_EMOTE_BOW = 17
+HORDE_RACES = "2,5,6,8,10"
 # Words of a player at a keyboard. A person in the world does not say them.
 META = re.compile(r"\b(levels?|xp|servers?|mmo|npcs?|dps|bots?|ai|language model|dungeon finder|respawn\w*|cooldowns?)\b", re.I)
 ADMITS = re.compile(r"\b(i am|i'm|yes,? i am|yes,? i'm)\s+(an?\s+)?(ai|a\.i\.|bot|program|language model|artificial)\b", re.I)
@@ -131,6 +139,129 @@ class RoleplayRun(minds_run.Run):
         spoiled = [h for h in said if META.search(h[3])]
         self.record("R6", "FAIL" if spoiled else "PASS", lines=[h[3] for h in said[:6]], count=len(said), spoiled=[h[3] for h in spoiled[:3]])
 
+    # ---- presence ---------------------------------------------------------------------------------------------
+    def horde_bot(self, exclude=()):
+        """(guid, name, level) of an online bot of the player's side, or None."""
+        skip = ",".join(str(g) for g in (list(exclude) + [0]))
+        rows = minds_run.mysql(self.args, "SELECT guid, name, level FROM %s.characters WHERE online = 1 AND race IN (%s) AND guid != %d AND guid NOT IN (%s) "
+                                          "AND name REGEXP '^[A-Za-z]{2,12}( [A-Za-z]{2,12})?$' AND level BETWEEN 10 AND 70 ORDER BY RAND() LIMIT 1"
+                               % (self.args.characters_db, HORDE_RACES, self.me.guid, skip))
+        return (int(rows[0][0]), rows[0][1], int(rows[0][2])) if rows else None
+
+    def appear_at(self, name):
+        self.client.say(".revive")
+        time.sleep(1.2)
+        self.client.say(".appear |cffffffff|Hplayer:%s|h[%s]|h|r" % (name, name))
+        time.sleep(6)
+
+    def r7_journal(self, bot):
+        guid, name = bot[0], bot[1]
+        level = int(minds_run.mysql(self.args, "SELECT level FROM %s.characters WHERE guid = %d" % (self.args.characters_db, guid))[0][0])
+        minds_run.console(self.args, 'character level "%s" %d' % (name, min(79, level + 1)))
+        time.sleep(3)
+        reply = self.ask(name, "What has the road been like for you lately?", wait=120)
+        event = self.row("SELECT kind, text FROM rp_event WHERE bot_guid = ? AND kind = 'levelup' ORDER BY ts DESC LIMIT 1", (guid,))
+        turn = self.row("SELECT mind AS system_prompt FROM turn_log WHERE bot_guid = ? AND lane = 'smart' ORDER BY id DESC LIMIT 1", (guid,))
+        if not reply:
+            return self.record("R7", "FAIL", why="no answer within 120 s")
+        if not event:
+            return self.record("R7", "FAIL", reply=reply, why="the mind service holds no level-up event for this bot: the module's journal did not arrive")
+        shown = "What has happened to you lately" in ((turn or {}).get("system_prompt") or "")
+        self.record("R7", "PASS" if shown else "FAIL", event=event["text"], reply=reply, why="" if shown else "the model was not shown what happened lately")
+
+    def r8_emote(self):
+        found = self.horde_bot()
+        if not found:
+            return self.record("R8", "SKIP", why="no bot of the player's side is online")
+        guid, name, _ = found
+        self.appear_at(name)
+        t0 = time.monotonic()
+        self.client.text_emote(TEXT_EMOTE_BOW, guid)
+        deadline = time.monotonic() + 15
+        emote = said = None
+        while time.monotonic() < deadline and not (emote and said):
+            time.sleep(0.5)
+            emote = emote or next((e for e in self.client.events_since_mono(t0, "emote") if e.data.get("guid") == guid), None)
+            said = said or next((c for c in self.client.chat_since_mono(t0) if c.sender_guid == guid and c.chat_type == CHAT_SAY), None)
+            if emote and time.monotonic() - t0 > 6:
+                break
+        self.record("R8", "PASS" if emote or said else "FAIL", bot=name, emote=bool(emote), line=said.text if said else "",
+                    why="" if emote or said else "the bot neither made an emote nor said anything within 15 s")
+
+    def r9_npc(self):
+        rows = minds_run.mysql(self.args, "SELECT c.guid, t.name FROM %s.creature c JOIN %s.creature_template t ON t.entry = c.id "
+                                          "WHERE (t.npcflag & 65536) AND t.faction IN (29, 68, 85, 104, 105, 126, 877, 1115, 1074) LIMIT 1"
+                               % (self.args.world_db, self.args.world_db))
+        if not rows:
+            return self.record("R9", "SKIP", why="no Horde-friendly innkeeper spawn found in the world database")
+        spawn, title = int(rows[0][0]), rows[0][1]
+        self.client.say(".revive")
+        time.sleep(1.2)
+        self.client.say(".go creature %d" % spawn)
+        time.sleep(7)
+        keeper = title.split(" ")[-1]
+        t0 = time.monotonic()
+        self.client.say("Innkeeper %s, do you have a bed for the night?" % keeper)
+        deadline = time.monotonic() + 25
+        heard = None
+        while time.monotonic() < deadline and not heard:
+            time.sleep(0.5)
+            heard = next((c for c in self.client.chat_since_mono(t0) if c.chat_type == CHAT_MONSTER_SAY), None)
+        if heard:
+            self.record("R9", "PASS" if not META.search(heard.text) else "FAIL", npc=heard.sender_name or title, reply=heard.text)
+        else:
+            self.record("R9", "FAIL", npc=title, why="no one answered within 25 s (is OllamaChat.Roleplay.NpcReplies on, and is the player on the whitelist?)")
+
+    def r10_proximity(self):
+        found = self.horde_bot()
+        if not found:
+            return self.record("R10", "SKIP", why="no bot of the player's side is online")
+        guid, name, _ = found
+        self.mind_write("INSERT OR REPLACE INTO relationship (bot_guid, other_guid, other_name, other_is_bot, first_seen, last_seen, interactions) "
+                        "VALUES (?, ?, ?, 0, ?, ?, 4)", (guid, self.me.guid, self.me.name, time.time() - 86400, time.time() - 3600))
+        self.client.say(".revive")
+        time.sleep(1)
+        t0 = time.monotonic()
+        self.client.say(".appear |cffffffff|Hplayer:%s|h[%s]|h|r" % (name, name))
+        deadline = time.monotonic() + 40
+        line = None
+        while time.monotonic() < deadline and not line:
+            time.sleep(0.5)
+            line = next((c for c in self.client.chat_since_mono(t0) if c.sender_guid == guid and c.chat_type == CHAT_SAY), None)
+        self.record("R10", "PASS" if line else "FAIL", bot=name, reply=line.text if line else "",
+                    why="" if line else "the bot did not greet within 40 s (ProximityGreet, the mind's reply, or the 25 s gap between greetings)")
+
+    def r11_companion(self):
+        found = self.horde_bot()
+        if not found:
+            return self.record("R11", "SKIP", why="no bot of the player's side is online")
+        guid, name, level = found
+        self.client.leave_group()
+        time.sleep(2)
+        self.appear_at(name)
+        self.client.invite(name)
+        time.sleep(6)
+        t0 = time.monotonic()
+        minds_run.console(self.args, 'character level "%s" %d' % (name, min(79, level + 1)))
+        deadline = time.monotonic() + 30
+        line = None
+        while time.monotonic() < deadline and not line:
+            time.sleep(0.5)
+            line = next((c for c in self.client.chat_since_mono(t0) if c.chat_type == CHAT_PARTY and c.sender_guid == guid), None)
+        self.client.leave_group()
+        self.record("R11", "PASS" if line else "FAIL", bot=name, reply=line.text if line else "",
+                    why="" if line else "the bot said nothing in party chat within 30 s of its level-up (is it grouped with the player, and CompanionRemarks on?)")
+
+    def mind_write(self, query, params=()):
+        import os
+        import sqlite3
+        db = sqlite3.connect(os.path.expanduser(self.args.mind_db))
+        try:
+            with db:
+                db.execute(query, params)
+        finally:
+            db.close()
+
     # ---- the run -----------------------------------------------------------------------------------------
     def run(self) -> int:
         try:
@@ -157,6 +288,16 @@ class RoleplayRun(minds_run.Run):
                 if not self.character:
                     self.r1_whisper_is_answered_by_a_character(bot)
                 self.r4_knows_where_it_is(bot)
+            if wants("R7"):
+                self.r7_journal(bot)
+            if wants("R8"):
+                self.r8_emote()
+            if wants("R9"):
+                self.r9_npc()
+            if wants("R10"):
+                self.r10_proximity()
+            if wants("R11"):
+                self.r11_companion()
             if wants("R5") or wants("R6"):
                 self.r5_r6_channels_and_say(self.args.watch)
         finally:
@@ -178,7 +319,7 @@ def main() -> int:
     minds_run.add_realm_args(parser)
     parser.add_argument("--mind-url", default="http://127.0.0.1:18800")
     parser.add_argument("--watch", type=float, default=240, help="seconds R5 and R6 listen among the bots")
-    parser.add_argument("--only", default="", help="R1, R2, R3, R4 or R5,R6 (R2 needs R1; R5 and R6 share a window)")
+    parser.add_argument("--only", default="", help="R1 ... R11, comma separated (R2 needs R1; R5 and R6 share a window)")
     return RoleplayRun(parser.parse_args()).run()
 
 

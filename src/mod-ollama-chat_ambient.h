@@ -9,6 +9,8 @@
 #include <ctime>
 #include <string>
 
+#include <nlohmann/json.hpp>
+
 class Channel;
 class Player;
 
@@ -23,6 +25,17 @@ namespace OllamaChat
     {
         // Percent chance that a bot in earshot answers a line that another bot said as part of an ambient conversation.
         uint32_t ChainChancePercent();
+
+        // Roleplay mode: the bots are characters in the lore (the mind service's chat mode, or OllamaChat.Roleplay.Mode). Roleplay is
+        // assumed until the service has answered. See docs/roleplay.md.
+        bool RoleplayActive();
+
+        // Blocking HTTP: call from a worker thread. The mind service's JSON answer to `request` at `route` ("/ambient", "/cast"), or null.
+        nlohmann::json MindPost(const std::string& route, const nlohmann::json& request, uint32_t timeoutSec);
+
+        // Can a line from one of these players be read by the other? The same side always can; the other side only when the realm allows
+        // two-side chat (otherwise the game shows it as gibberish, and a character would not answer what it cannot understand).
+        bool SameSideCanTalk(Player* a, Player* b);
 
         // True when `msg`, said by the bot `speakerGuid`, is a line an ambient reply put in that bot's mouth a moment ago.
         bool IsSceneLine(uint64_t speakerGuid, const std::string& msg);

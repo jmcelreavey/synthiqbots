@@ -7,6 +7,7 @@
 #include "mod-ollama-chat_fleet.h"
 #include "mod-ollama-chat_promotion.h"
 #include "mod-ollama-chat_ambient.h"
+#include "mod-ollama-chat_roleplay.h"
 #include "mod-ollama-chat_worldtask.h"
 #include "mod-ollama-chat_mcpserver.h"
 #include "mod-ollama-chat_opsapi.h"
@@ -25035,7 +25036,19 @@ nlohmann::json DescribeBotBrief(Player* p)
         if (!questId)
             continue;
         if (Quest const* quest = sObjectMgr->GetQuestTemplate(questId))
-            quests.push_back(quest->GetTitle());
+        {
+            // The aim as the game words it, without its $n and $r placeholders: the mind service describes the errand once from it.
+            std::string goal;
+            for (size_t i = 0; i < quest->GetObjectives().size() && goal.size() < 140; ++i)
+            {
+                const char c = quest->GetObjectives()[i];
+                if (c == '$' && i + 1 < quest->GetObjectives().size())
+                    ++i;
+                else
+                    goal += c;
+            }
+            quests.push_back({{"title", quest->GetTitle()}, {"goal", goal.substr(0, 140)}});
+        }
     }
     std::string doing = "walking the road";
     if (p->IsInCombat())
@@ -25050,5 +25063,7 @@ nlohmann::json DescribeBotBrief(Player* p)
         doing = "working through your errands";
     brief["quests"] = quests;
     brief["doing"] = doing;
+    brief["events"] = OllamaChat::Roleplay::RecentEvents(p->GetGUID().GetRawValue());
+    OllamaChat::Roleplay::AddWorldColour(brief, p);
     return brief;
 }

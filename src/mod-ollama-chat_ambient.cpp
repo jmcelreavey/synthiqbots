@@ -5,6 +5,7 @@
 #include "mod-ollama-chat_gateway.h"
 #include "mod-ollama-chat_httpclient.h"
 #include "mod-ollama-chat_promotion.h"
+#include "mod-ollama-chat_roleplay.h"
 #include "mod-ollama-chat_tools.h"
 #include "mod-ollama-chat_worldtask.h"
 
@@ -23,6 +24,7 @@
 #include "PlayerbotMgr.h"
 #include "QueryResult.h"
 #include "Random.h"
+#include "World.h"
 
 #include <nlohmann/json.hpp>
 
@@ -146,8 +148,9 @@ namespace OllamaChat
             {
                 request["gender"] = brief.value("gender", std::string{});
                 request["doing"] = brief.value("doing", std::string{});
-                if (brief.contains("quests") && brief["quests"].is_array())
-                    request["quests"] = brief["quests"];
+                for (const char* key : {"quests", "events", "time", "weather", "holidays"})
+                    if (brief.contains(key))
+                        request[key] = brief[key];
             }
 
             void AddBrief(nlohmann::json& request, const nlohmann::json& brief)
@@ -161,8 +164,13 @@ namespace OllamaChat
             // How long a person takes to type `chars` characters; the time already spent getting the words is taken off.
             uint32_t TypingDelayMs(size_t chars, std::chrono::steady_clock::time_point since)
             {
-                const uint64_t want = std::min<uint64_t>(Number("OllamaChat.Ambient.TypingMaxMs", 4500),
-                                                        Number("OllamaChat.Ambient.TypingBaseMs", 500) + chars * Number("OllamaChat.Ambient.TypingMsPerChar", 40));
+                // A character speaks, it does not type: roleplay has its own, quicker figures.
+                const bool speech = RoleplayOn();
+                const uint64_t want = speech
+                    ? std::min<uint64_t>(Number("OllamaChat.Roleplay.TypingMaxMs", 3000),
+                                         Number("OllamaChat.Roleplay.TypingBaseMs", 300) + chars * Number("OllamaChat.Roleplay.TypingMsPerChar", 22))
+                    : std::min<uint64_t>(Number("OllamaChat.Ambient.TypingMaxMs", 4500),
+                                         Number("OllamaChat.Ambient.TypingBaseMs", 500) + chars * Number("OllamaChat.Ambient.TypingMsPerChar", 40));
                 const uint64_t spent = static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - since).count());
                 return want > spent ? static_cast<uint32_t>(want - spent) : 0;
             }
@@ -565,6 +573,21 @@ namespace OllamaChat
             return Number("OllamaChat.Ambient.ChainChance", 60);
         }
 
+        bool RoleplayActive()
+        {
+            return RoleplayOn();
+        }
+
+        nlohmann::json MindPost(const std::string& route, const nlohmann::json& request, uint32_t timeoutSec)
+        {
+            return PostMind(route, request, timeoutSec);
+        }
+
+        bool SameSideCanTalk(Player* a, Player* b)
+        {
+            return !a || !b || a->GetTeamId() == b->GetTeamId() || sWorld->getBoolConfig(CONFIG_ALLOW_TWO_SIDE_INTERACTION_CHAT);
+        }
+
         namespace
         {
             bool Rewrite(Player* speaker, const std::string& kind, const std::string& channelName, const std::string& msg);
@@ -745,6 +768,8 @@ namespace OllamaChat
                         continue;
                     if (inEarshot && (bot->GetMapId() != operatorPlayer->GetMapId() || bot->GetDistance(operatorPlayer) > earshot))
                         continue;
+                    if (inEarshot && RoleplayOn() && !SameSideCanTalk(bot, operatorPlayer))
+                        continue;   // the other side's speech is gibberish to the player
                     if (sameGuild && (!operatorPlayer->GetGuildId() || bot->GetGuildId() != operatorPlayer->GetGuildId()))
                         continue;
                     if (forTrade && (bot->GetTeamId() != operatorPlayer->GetTeamId() || !TradeChannelOf(bot)))
@@ -1160,7 +1185,10 @@ namespace OllamaChat
         void Tick(uint32_t diff)
         {
             if (Enabled() && g_GatewayEnable)
+            {
                 PollChatMode(diff);
+                OllamaChat::Roleplay::Tick(diff);
+            }
             if (Enabled() && g_GatewayEnable && Number("OllamaChat.Community.Enable", 1))
                 CommunityTick(diff);
             s_starterElapsedMs += diff;
@@ -1425,6 +1453,8 @@ namespace OllamaChat
                     directed = true;
                 if (directed && NeedsTools(msg))
                     return false;   // asked to DO something: the ordinary (promoted, tool-using) path answers it
+                if (RoleplayOn() && !SameSideCanTalk(bot, speaker))
+                    return true;    // it is gibberish to the bot (and the player would read none of the answer): a character does not reply to it
                 if (Group* group = bot->GetGroup())
                     if (group->IsMember(speaker->GetGUID()))
                         return false;   // a party companion is spoken to through the party paths
@@ -1485,8 +1515,13 @@ namespace OllamaChat
             };
             AddRoleplayFields(request, brief);
 
+            // Somebody who is spoken to looks up and thinks: a bot's own thinking pose while the words are fetched.
+            if (directed && RoleplayOn() && Number("OllamaChat.Roleplay.AckEmote", 1) && !bot->IsInCombat())
+                bot->HandleEmoteCommand(EMOTE_ONESHOT_QUESTION);
+            const bool speech = RoleplayOn();
             const uint32_t stagger = static_cast<uint32_t>(Number("OllamaChat.Ambient.StaggerMs", 1600)) * staggerIndex
-                + urand(Number("OllamaChat.Ambient.JitterMinMs", 600), Number("OllamaChat.Ambient.JitterMaxMs", 1800));
+                + urand(speech ? Number("OllamaChat.Roleplay.JitterMinMs", 250) : Number("OllamaChat.Ambient.JitterMinMs", 600),
+                        speech ? Number("OllamaChat.Roleplay.JitterMaxMs", 900) : Number("OllamaChat.Ambient.JitterMaxMs", 1800));
             const uint32_t maxChars = Number("OllamaChat.Ambient.MaxLineChars", 200);
 
             const uint64_t speakerGuid = speaker->GetGUID().GetRawValue();

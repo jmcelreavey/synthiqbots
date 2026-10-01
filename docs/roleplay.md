@@ -29,13 +29,32 @@ the lore and the line bank live in the mind service.
    `SayRangeYards` 30, `YellRangeYards` 90), picked from the bots within earshot; the bots around may answer, a few lines deep, then it
    goes quiet.
 
+6. **Keeps a journal.** `OllamaChat::Roleplay::Note` (called from a `PlayerScript`) remembers each bot's last ten level-ups, new zones, finished errands, deaths,
+   dungeon bosses, notorious kills and rare finds, and `DescribeBotBrief` sends them (with the time of day, the holidays being kept, and the
+   titles and aims of its open errands) in the bot's context. The mind service stores them and writes the bot's chapters around them.
+7. **Presence** (`src/mod-ollama-chat_roleplay.cpp`):
+   - *Companions*: a bot in a party with a whitelisted player says a line in party chat about a new zone, a great foe, a fall, a find, a quiet
+     road (`CompanionRemarks`, `CompanionIdleMinutes`, one per party per `CompanionGapSec`).
+   - *Greetings*: a bot that knows a player says hello when they come within `ProximityGreetYards` (the mind decides who is a stranger).
+   - *Emotes*: `/bow`, `/wave`, `/thank`, `/laugh` and the like, aimed at a bot or at nobody near one, are answered with an emote and, `EmoteSpeakPercent` of
+     the time, a bank line.
+   - *The people of the world*: an innkeeper, guard, trainer, vendor, banker, auctioneer, stable master, flight master or quest giver within
+     `NpcRangeYards` answers a whitelisted player's `/say` when they are selected or named by name, title or role (`NpcReplies`); the game's
+     own friendliness decides whether they are warm or curt.
+   - *Sides*: a character does not answer, and does not speak up in `/say` for, a player of the other faction unless `AllowTwoSide.Interaction.Chat` is on.
+   - *Speech, not typing*: `OllamaChat.Roleplay.Typing*` and `Jitter*` replace the ambient figures, and a bot spoken to by name makes a thinking gesture
+     (`AckEmote`) while its answer is fetched.
+8. **Calls a bot by its first name.** `Promotion::ShortName` is the first word of a two-word name, so "Elorin" reaches "Elorin Moonwhisper".
+
 Players mode is untouched: with `chat_mode = players` or `OllamaChat.Roleplay.Mode = players` nothing above applies and the module behaves as
 before.
 
 ## Keys
 
 All in the *ROLEPLAY* section of `conf/mod_ollama_chat.conf.dist`: `OllamaChat.Roleplay.Mode`, `.Channels`, `.DropStockLines`, `.SayWeight`,
-`.SayRangeYards`, `.YellRangeYards`, `.PollSeconds`. `OllamaChat.Ambient.Channels` now lists `guild` by default.
+`.SayRangeYards`, `.YellRangeYards`, `.PollSeconds`, `.Typing*`, `.Jitter*`, `.AckEmote`, `.EmoteReplies`, `.EmoteNearbyPercent`, `.EmoteSpeakPercent`,
+`.ProximityGreet*`, `.CompanionRemarks`, `.CompanionIdleMinutes`, `.CompanionGapSec`, `.CompanionBotGapSec`, `.NpcReplies`, `.NpcRangeYards`, `.NpcGapSec`.
+`OllamaChat.Ambient.Channels` now lists `guild` by default.
 
 ## Things to know
 
@@ -45,5 +64,7 @@ All in the *ROLEPLAY* section of `conf/mod_ollama_chat.conf.dist`: `OllamaChat.R
 - With `AiPlayerbot.CoaBotSurname = 1` (the default) playerbots gives every bot a placeholder surname, " Bot". Two-word names are
   left alone, so renaming the bots to names that suit their race (`tools/rename_bots.py` in the dashboard repo, a dry run unless
   `--apply`) needs no change to playerbots' own settings.
+- The zone's weather is not sent: the core keeps a zone's weather state private.
+- `tools/e2e/roleplay_run.py` R7-R11 check the journal, an emote, an innkeeper, a greeting and a companion remark on a live realm.
 - The `[BOT STATE SNAPSHOT]` is read on the thread that already read the bot's state for it; the errand titles are the quests' English
   names.
