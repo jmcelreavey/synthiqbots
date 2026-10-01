@@ -10,6 +10,7 @@
 #include "mod-ollama-chat_tactical.h"
 #include "mod-ollama-chat_overlord.h"
 #include "mod-ollama-chat_fleet.h"
+#include "mod-ollama-chat_roster.h"
 #include "mod-ollama-chat_promotion.h"
 #include "mod-ollama-chat_worldtask.h"
 #include "mod-ollama-chat_personality.h"
@@ -1891,6 +1892,8 @@ void OllamaChatConfigWorldScript::OnStartup()
     PruneGatewayAuditRows();
     PruneTacticalAuditRows();
     Jev::EnsureAuditBackendColumns();   // idempotent; the image never auto-applies data/sql updates
+    // playerbots forgets the roster of random bots at every start; put it back before the first update reads it.
+    OllamaChat::Roster::Restore();
 
     // Initialize RAG system if enabled
     if (g_EnableRAG) {
@@ -1923,6 +1926,9 @@ void OllamaChatConfigWorldScript::OnUpdate(uint32 diff)
     // Fleet party/master reconciliation — world thread, interval-gated inside
     // Tick, no-op unless OllamaChat.Fleet.EnsureParty=1.
     OllamaChat::Fleet::Tick(diff);
+
+    // The roster of random bots, copied so a restart can put the same bots back (interval-gated inside Tick).
+    OllamaChat::Roster::Tick(diff);
 
     // Bot promotion: party guests re-derived from live groups, chat windows
     // expired. World thread, interval-gated inside Tick.
