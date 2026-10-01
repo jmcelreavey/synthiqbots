@@ -149,11 +149,11 @@ breaking it and watching the harness fail.
 ## Limits
 
 - It cannot make a bot do something the engine cannot (no CC spell in the party, no interrupt available).
-- **Crowd control is the least proven part.** What is known: the playerbots source makes the moon the default `rti cc` mark, and its crowd-control target
+- **Crowd control is the least exercised part.** What is known: the playerbots source makes the moon the default `rti cc` mark, and its crowd-control target
   chooser (`FindTargetForCcStrategy`) takes the moon-marked unit first whenever the bot can cast the spell on it; mage, warlock, rogue, hunter and druid
   have triggers that use it. On the CoA test realm, which has no stock-class bots, a stock mage alt was brought in as a playerbot (see below): with it in
   the party the director offered CC, jev chose a target, the moon went up, the bot said so, and a mark whose enemy was attacking anyway was released. What
-  was **not** seen is the polymorph itself: the mage, with four mobs on top of it, opened with Frost Nova. Not every enemy can be crowd-controlled
+  was seen on a later run, with hostile level-20 spiders and a slime instead of four mobs on top of the mage: the moon went up on a spider within two seconds, Frost Nova, then **Polymorph** on the moon-marked enemy (`.list auras`), the mark came down when the cast was done and the skull went on another enemy. (The first attempt, with beasts that never aggroed, saw no fight at all; `tools`-wise use hostile mobs of the party's level, as `director_run.py` picks.) Not every enemy can be crowd-controlled
   (polymorph skips undead and elementals, say) and the director does not check creature types. The engine's DPS and tank target choosers skip a
   moon-marked unit outright, so a mark that is not holding would leave the party unwilling to fight back at it: an enemy that is *attacking* while
   it carries the director's moon, once the cast has had 4 s, has its mark released at once and is never offered for CC again that fight
@@ -173,4 +173,4 @@ own voice; at the next consult all of the attackers were on the marked enemy, th
 with the player taking the skull off, the director does not place it again for the 20 s yield; the marks are gone after every fight; the player's off switch
 is honoured and survives a logout; and a forced `conserve` puts `save mana` on a healer, the engine agrees, and it is off again afterwards. Counting
 only fights where jev was sure, no run has failed since the yield carry-over was added; a fight where jev is not sure is a SKIP, by design. The
-crowd-control path is checked as far as the moon going up (with a stock mage alt, see Limits) and by the harness, not as far as a polymorph.
+crowd-control path is checked live once, with a stock mage alt (see Limits): moon up, Polymorph on the marked enemy, moon released; one run is not a soak, and the other CC classes are checked only by the harness.
