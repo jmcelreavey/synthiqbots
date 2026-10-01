@@ -3248,3 +3248,25 @@ OllamaChat.Roleplay.CompanionBotGapSec = 150
 OllamaChat.Roleplay.NpcReplies = 1
 OllamaChat.Roleplay.NpcRangeYards = 10
 OllamaChat.Roleplay.NpcGapSec = 5
+
+# OllamaChat.Roleplay.ChainChance / ChainMaxDepth / MaxLinesPerScene / BotCooldownSec / StaggerMs / LineGapMs / StarterMinGapSec / GuildChatWeight
+#     Description: How lively a conversation among characters is. Roleplay reads these in place of the Ambient.* figures (a crowd of fake
+#                  players can pile on and chain a line five deep; people in a guild take turns): the chance a bot's line is answered, how
+#                  many answers deep it goes, lines per scene, a bot's quiet time after speaking, the pause per extra answerer, the least
+#                  gap between two lines in a place, the least gap between two unprompted remarks, and how often a player's guild is the
+#                  place a character starts one. A line is answered by one bot, and a line spoken to somebody by name by that somebody only.
+#     Default:     55 / 2 / 5 / 45 / 3500 / 4500 / 110 / 25
+OllamaChat.Roleplay.ChainChance = 55
+OllamaChat.Roleplay.ChainMaxDepth = 2
+OllamaChat.Roleplay.MaxLinesPerScene = 5
+OllamaChat.Roleplay.BotCooldownSec = 45
+OllamaChat.Roleplay.StaggerMs = 3500
+OllamaChat.Roleplay.LineGapMs = 4500
+OllamaChat.Roleplay.StarterMinGapSec = 110
+OllamaChat.Roleplay.GuildChatWeight = 25
+
+# OllamaChat.Gateway.SoleCompanionNeedsNoName
+#     Description: In a party of one whitelisted player and one bot, whatever the player says in party chat is said to that bot, named or
+#                  not ("Whats your cape?"). With more bots in the party a line still has to name the one it is for.
+#     Default:     1
+OllamaChat.Gateway.SoleCompanionNeedsNoName = 1

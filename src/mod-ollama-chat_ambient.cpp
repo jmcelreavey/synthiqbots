@@ -153,6 +153,15 @@ namespace OllamaChat
                         request[key] = brief[key];
             }
 
+            // How lively a conversation is. A crowd of fake players can pile on and chain a line five deep; people in a guild take turns, so
+            // roleplay reads its own, slower figures (OllamaChat.Roleplay.<name>) and everything else the Ambient ones.
+            uint32_t Pace(const char* name, uint32_t roleplayFallback, uint32_t ambientFallback)
+            {
+                const bool speech = RoleplayOn();
+                const std::string key = std::string(speech ? "OllamaChat.Roleplay." : "OllamaChat.Ambient.") + name;
+                return Number(key.c_str(), speech ? roleplayFallback : ambientFallback);
+            }
+
             void AddBrief(nlohmann::json& request, const nlohmann::json& brief)
             {
                 request["level"] = brief.value("level", 0);
@@ -184,7 +193,7 @@ namespace OllamaChat
                 std::lock_guard<std::mutex> lock(s_mutex);
                 auto& nextFree = s_nextLineAt[sceneKey];   // a new scene starts at the epoch, which is always in the past
                 const auto sendAt = std::max(typed, nextFree);
-                nextFree = sendAt + std::chrono::milliseconds(Number("OllamaChat.Ambient.LineGapMs", 2000));
+                nextFree = sendAt + std::chrono::milliseconds(Pace("LineGapMs", 4500, 2000));
                 return static_cast<uint32_t>(std::chrono::duration_cast<std::chrono::milliseconds>(sendAt - now).count());
             }
 
@@ -562,7 +571,8 @@ namespace OllamaChat
                     if (speaker && buddy)
                         HandleIn(buddy, speaker, text, kind, std::string{}, true, true);
                 }
-                if (said && kind != "say" && kind != "yell")
+                // A line spoken to somebody by name is answered by that somebody; in roleplay nobody else breaks in.
+                if (said && kind != "say" && kind != "yell" && !(answererGuid && RoleplayOn()))
                     ChainFrom(botGuid, kind, text);
                 return said;
             }
@@ -570,7 +580,7 @@ namespace OllamaChat
 
         uint32_t ChainChancePercent()
         {
-            return Number("OllamaChat.Ambient.ChainChance", 60);
+            return Pace("ChainChance", 55, 60);
         }
 
         bool RoleplayActive()
@@ -664,7 +674,7 @@ namespace OllamaChat
             {
                 std::lock_guard<std::mutex> lock(s_mutex);
                 auto last = s_lastReplyAt.find(botGuid);
-                if (last != s_lastReplyAt.end() && now - last->second < static_cast<time_t>(Number("OllamaChat.Ambient.BotCooldownSec", 20)))
+                if (last != s_lastReplyAt.end() && now - last->second < static_cast<time_t>(Pace("BotCooldownSec", 45, 20)))
                     return false;   // it spoke a moment ago: let the stock line through rather than swallow it
                 s_lastReplyAt[botGuid] = now;
             }
@@ -758,7 +768,7 @@ namespace OllamaChat
                 Player* chosen = nullptr;
                 Player* chosenCast = nullptr;
                 uint32_t seen = 0, seenCast = 0;
-                const uint32_t cooldown = Number("OllamaChat.Ambient.BotCooldownSec", 20);
+                const uint32_t cooldown = Pace("BotCooldownSec", 45, 20);
                 for (auto const& entry : ObjectAccessor::GetPlayers())
                 {
                     Player* bot = entry.second;
@@ -877,7 +887,7 @@ namespace OllamaChat
                 // Mostly the zone channel, sometimes LFG or Trade; a player in a guild hears their guild the most. A channel the
                 // operator switched off is skipped.
                 struct Option { const char* kind; uint32_t weight; };
-                const uint32_t guildWeight = operatorPlayer && operatorPlayer->GetGuildId() ? Number("OllamaChat.Community.GuildChatWeight", 40) : 0;
+                const uint32_t guildWeight = operatorPlayer && operatorPlayer->GetGuildId() ? (RoleplayOn() ? Number("OllamaChat.Roleplay.GuildChatWeight", 25) : Number("OllamaChat.Community.GuildChatWeight", 40)) : 0;
                 const uint32_t tradeWeight = TradeChannelOf(operatorPlayer) ? 10 : 0;   // nobody outside a city hears Trade
                 const uint32_t sayWeight = RoleplayOn() ? Number("OllamaChat.Roleplay.SayWeight", 70) : 0;   // a character speaks to those near it
                 const Option options[] = {{"say", sayWeight}, {"world", 45}, {"zone", 35}, {"lfg", 10}, {"trade", tradeWeight}, {"guild", guildWeight}};
@@ -1220,7 +1230,7 @@ namespace OllamaChat
                     if (scene != s_scenes.end() && now <= scene->second.expires)
                         continue;   // people are already talking here: wait for them to finish
                     auto last = s_lastStarterAt.find(areaKey);
-                    if (last != s_lastStarterAt.end() && now - last->second < static_cast<time_t>(Number("OllamaChat.Ambient.StarterMinGapSec", 45)))
+                    if (last != s_lastStarterAt.end() && now - last->second < static_cast<time_t>(Pace("StarterMinGapSec", 110, 45)))
                         continue;
                 }
                 uint32_t nearby = 0;
@@ -1442,7 +1452,7 @@ namespace OllamaChat
                 if (it == s_lastLine.end() || it->second.hash != HashOf(msg) || time(nullptr) - it->second.at > kLineLifetimeSec)
                     return false;   // an ordinary bot line (or an old one): not part of a conversation we started
                 depth = it->second.depth + 1;
-                if (depth > Number("OllamaChat.Ambient.ChainMaxDepth", 2) + 1)
+                if (depth > Pace("ChainMaxDepth", 2, 2) + 1)
                     return true;
             }
             else
@@ -1466,7 +1476,7 @@ namespace OllamaChat
             {
                 std::lock_guard<std::mutex> lock(s_mutex);
                 auto last = s_lastReplyAt.find(botGuid);
-                if (!directed && last != s_lastReplyAt.end() && now - last->second < static_cast<time_t>(Number("OllamaChat.Ambient.BotCooldownSec", 20)))
+                if (!directed && last != s_lastReplyAt.end() && now - last->second < static_cast<time_t>(Pace("BotCooldownSec", 45, 20)))
                     return true;   // this bot spoke a moment ago: quiet, and the line is still ours
                 Scene& scene = s_scenes[areaKey];
                 if (!speakerIsBot)
@@ -1476,7 +1486,7 @@ namespace OllamaChat
                 }
                 else if (now > scene.expires)
                     return true;
-                if (scene.lines >= Number("OllamaChat.Ambient.MaxLinesPerScene", 8))
+                if (scene.lines >= Pace("MaxLinesPerScene", 5, 8))
                     return true;
                 ++scene.lines;
                 s_lastReplyAt[botGuid] = now;
@@ -1519,7 +1529,7 @@ namespace OllamaChat
             if (directed && RoleplayOn() && Number("OllamaChat.Roleplay.AckEmote", 1) && !bot->IsInCombat())
                 bot->HandleEmoteCommand(EMOTE_ONESHOT_QUESTION);
             const bool speech = RoleplayOn();
-            const uint32_t stagger = static_cast<uint32_t>(Number("OllamaChat.Ambient.StaggerMs", 1600)) * staggerIndex
+            const uint32_t stagger = static_cast<uint32_t>(Pace("StaggerMs", 3500, 1600)) * staggerIndex
                 + urand(speech ? Number("OllamaChat.Roleplay.JitterMinMs", 250) : Number("OllamaChat.Ambient.JitterMinMs", 600),
                         speech ? Number("OllamaChat.Roleplay.JitterMaxMs", 900) : Number("OllamaChat.Ambient.JitterMaxMs", 1800));
             const uint32_t maxChars = Number("OllamaChat.Ambient.MaxLineChars", 200);
@@ -1574,8 +1584,9 @@ namespace OllamaChat
             if (!speaker || !speaker->IsInWorld())
                 return;
             const uint32_t chance = ChainChancePercent();
-            // One or two answer each line, so a room reads as people taking turns and not everyone piling on the first remark.
-            const uint32_t wanted = urand(1, std::max<uint32_t>(1, std::min<uint32_t>(2, Number("OllamaChat.MaxBotsToPick", 3))));
+            // One or two answer each line, so a room reads as people taking turns and not everyone piling on the first remark. A character
+            // answers with one voice at a time: a line is answered by one.
+            const uint32_t wanted = RoleplayOn() ? 1 : urand(1, std::max<uint32_t>(1, std::min<uint32_t>(2, Number("OllamaChat.MaxBotsToPick", 3))));
             std::vector<Player*> chosen;
             uint32_t seen = 0;
             bool haveCast;

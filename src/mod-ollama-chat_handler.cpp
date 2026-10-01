@@ -1111,7 +1111,29 @@ void PlayerBotChatHandler::ProcessChat(Player* player, uint32_t type, uint32_t l
             continue;
         }
 
-        const bool aimedAtBot = addressedBots.count(botGuid) > 0;
+        bool aimedAtBot = addressedBots.count(botGuid) > 0;
+        // A party of one player and one bot: whatever the player says in party chat is said to that bot, named or not. ("Whats your cape?" got no
+        // answer because it did not say "Aldric".)
+        if (!aimedAtBot && !senderIsBot && sourceLocal == SRC_PARTY_LOCAL && OllamaChat::Promotion::IsOperator(player)
+            && sConfigMgr->GetOption<bool>("OllamaChat.Gateway.SoleCompanionNeedsNoName", true, false))
+        {
+            if (Group* group = player->GetGroup())
+            {
+                uint32_t bots = 0;
+                bool thisOne = false;
+                for (auto const& slot : group->GetMemberSlots())
+                {
+                    Player* member = ObjectAccessor::FindPlayer(slot.guid);
+                    PlayerbotAI* memberAi = member ? PlayerbotsMgr::instance().GetPlayerbotAI(member) : nullptr;
+                    if (memberAi && memberAi->IsBotAI())
+                    {
+                        ++bots;
+                        thisOne = thisOne || member == bot;
+                    }
+                }
+                aimedAtBot = bots == 1 && thisOne;
+            }
+        }
         if (aimedAtBot && !senderIsBot && sourceLocal != SRC_WHISPER_LOCAL)
             OllamaChat::Ambient::RememberPartner(player, sourceLocal, channel, botGuid, true);
 

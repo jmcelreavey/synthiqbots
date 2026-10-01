@@ -24913,8 +24913,23 @@ nlohmann::json DispatchGatewayTool(uint64_t botGuid, uint64_t playerGuid,
     nlohmann::json effectiveArgs = args;
     if (reg.find(name) == reg.end() && IsFacadeGroup(name))
     {
+        // A model that names the wrong group for a real action ("combat" for bot_pet_command, which lives in "pets") is not refused any more:
+        // the action runs from its own group, provided this very bot may use it (the same scope and allowlist the advertised array applies).
+        // Refusing it cost a player a minion that would not attack, and the model's "I tried but the command failed" was the whole answer.
+        const std::string wanted = args.value("action", std::string{});
+        if (botGuid != 0 && !wanted.empty() && args.value("describe", std::string{}).empty() && reg.count(wanted)
+            && GetGatewayToolGroup(wanted) != name && IsToolVisibleToBot(wanted, botGuid))
+        {
+            const std::vector<std::string> allowed = ResolveAllowedTools(botGuid);
+            if (allowed.empty() || std::find(allowed.begin(), allowed.end(), wanted) != allowed.end())
+            {
+                LOG_INFO("server.loading", "[Ollama Chat Facade] '{}' asked for '{}', which is in '{}': run from there", name, wanted, GetGatewayToolGroup(wanted));
+                effectiveName = wanted;
+                effectiveArgs = args.contains("params") && args["params"].is_object() ? args["params"] : nlohmann::json::object();
+            }
+        }
         nlohmann::json err;
-        if (!ResolveFacadeCall(name, args, effectiveName, effectiveArgs, err))
+        if (effectiveName == name && !ResolveFacadeCall(name, args, effectiveName, effectiveArgs, err))
             return err; // error, or a successful `describe` payload
     }
 

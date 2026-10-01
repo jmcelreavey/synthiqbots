@@ -44,7 +44,14 @@ the lore and the line bank live in the mind service.
    - *Sides*: a character does not answer, and does not speak up in `/say` for, a player of the other faction unless `AllowTwoSide.Interaction.Chat` is on.
    - *Speech, not typing*: `OllamaChat.Roleplay.Typing*` and `Jitter*` replace the ambient figures, and a bot spoken to by name makes a thinking gesture
      (`AckEmote`) while its answer is fetched.
-8. **Calls a bot by its first name.** `Promotion::ShortName` is the first word of a two-word name, so "Elorin" reaches "Elorin Moonwhisper".
+8. **Takes turns.** In roleplay a conversation among characters is slower and thinner than a crowd of fake players: a line is answered by one bot (or, if it was
+   spoken to somebody by name, by that somebody only), a scene is five lines, two answers deep, with at least 4.5 s between lines
+   (`OllamaChat.Roleplay.ChainChance` ... `GuildChatWeight`).
+9. **A sole companion needs no name.** In a party of one player and one bot, an unnamed party line is for that bot (`Gateway.SoleCompanionNeedsNoName`);
+   "Whats your cape?" got no answer before because it did not say the bot's name.
+10. **Runs an action from its own group.** A model that asks for `bot_pet_command` through the `combat` tool (it lives in `pets`) is no longer refused:
+    the action runs from its own group if this bot may use it.
+11. **Calls a bot by its first name.** `Promotion::ShortName` is the first word of a two-word name, so "Elorin" reaches "Elorin Moonwhisper".
 
 Players mode is untouched: with `chat_mode = players` or `OllamaChat.Roleplay.Mode = players` nothing above applies and the module behaves as
 before.
